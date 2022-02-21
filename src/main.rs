@@ -2,30 +2,22 @@ use anyhow::Result;
 use containerd_client::connect;
 use containerd_client::with_namespace;
 use nix;
-use std::borrow::Borrow;
-use std::collections::HashSet;
 use std::net::Ipv4Addr;
 use std::os::unix::io::{IntoRawFd, RawFd};
-use std::collections::HashMap;
 
 use containerd_client::services::v1::containers_client::ContainersClient;
 use containerd_client::services::v1::GetContainerRequest;
-use pnet::datalink::EtherType;
-use pnet::packet::ethernet::EtherTypes;
-use pnet::packet::ip::IpNextHeaderProtocols;
 use serde::{Deserialize, Serialize};
 use tonic::Request;
 
 use pnet::datalink::Channel::Ethernet;
 use pnet::datalink::{self, NetworkInterface};
 use pnet::packet::ethernet::EthernetPacket;
-use pnet::packet::ipv4::Ipv4Packet;
-use pnet::packet::tcp::{TcpFlags, TcpPacket};
 use pnet::packet::Packet;
 
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 mod api;
-use api::*;
+use tcpassembler::TCPAssembler;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Namespace {
@@ -61,147 +53,7 @@ impl PartialEq for SessionIdentifier {
     }
 }
 
-#[derive(Debug, Eq)]
-struct TCPSession {
-    pub parts: HashMap<u32, Vec<u8>>,
-    pub data: Vec<u8>,
-    pub current_seq: usize,
-    pub fin_seq: Option<usize>,
-    identifier: SessionIdentifier,
-}
 
-impl TCPSession {
-    fn new(start_seq: u32, identifier: SessionIdentifier) -> Self {
-        TCPSession {
-            parts: HashMap::new(),
-            data: Vec::new(),
-            current_seq: start_seq,
-            fin_seq: None,
-            identifier,
-        }
-    }
-    
-    fn add_packet(&mut self, packet: &TcpPacket) -> Option<Vec<u8>> {
-        let seq = packet.get_sequence();
-        let data = packet.payload();
-        if seq as usize == self.current_seq {
-            
-        } else if seq > self.current_seq {
-            let mut missing_data = Vec::new();
-            let mut missing_seq = self.current_seq;
-            while missing_seq < seq {
-                missing_data.push(0);
-                missing_seq += 1;
-            }
-            missing_data.extend(data);
-            self.parts.insert(seq, missing_data);
-            self.current_seq = seq + data.len() as u32;
-            None
-        } else {
-            Some(data)
-        }
-        self.parts.insert(seq, data.to_vec());
-        if packet.flags() == TcpFlags::FIN {
-            self.fin_seq = Some(seq + data.len() as u32);
-        }
-    }
-}
-
-enum TCPResult {
-    MoreData(Vec<u8>), // Session has ready data
-    ClosedMoreData(Vec<u8>), // Session has closed but has more data.
-    NoData, // Session has no data (received frame without data or data is not complete [out of sequence])
-    Closed, // Session has been closed
-}
-
-impl Hash for TCPSession {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.identifier.hash(state)
-    }
-}
-
-impl PartialEq for TCPSession {
-    fn eq(&self, other: &TCPSession) -> bool {
-        self.identifier == other.identifier
-    }
-}
-
-impl Borrow<SessionIdentifier> for TCPSession {
-    fn borrow(&self) -> &SessionIdentifier {
-        &self.identifier
-    }
-}
-
-struct SessionManager {
-    sessions: HashSet<TCPSession>,
-}
-
-impl SessionManager {
-    fn new() -> Self {
-        Self {
-            sessions: HashSet::new(),
-        }
-    }
-
-    fn add_packet(&mut self, packet: &EthernetPacket) -> Result<()> {
-        // match packet.get_ethertype() {
-        //     EtherTypes::Ipv4 => {
-        //         let packet = Ipv4Packet::new(packet.payload()).unwrap();
-        //         match packet.get_next_level_protocol() {
-        //             IpNextHeaderProtocols::Tcp => {
-        //                 let packet = TcpPacket::new(packet.payload()).unwrap();
-        //                 println!("TCP packet received, {:?}", packet.payload().len());
-        //             },
-        //             _ => {
-        //                 println!("ignored");
-        //             }
-        //         }
-        //     },
-        //     _ => {
-        //         println!("ignored")
-        //     }
-        if packet.get_ethertype() != EtherTypes::Ipv4 {
-            return Ok(());
-        }
-        let ip_packet = Ipv4Packet::new(packet.payload())
-            .ok_or(anyhow::anyhow!("failed to parse ipv4 packet"))?;
-
-        if ip_packet.get_next_level_protocol() != IpNextHeaderProtocols::Tcp {
-            return Ok(());
-        }
-        let tcp_packet = TcpPacket::new(ip_packet.payload())
-            .ok_or(anyhow::anyhow!("failed to parse tcp packet"))?;
-
-        let src_ip = ip_packet.get_source();
-        let dst_ip = ip_packet.get_destination();
-        let src_port = tcp_packet.get_source();
-        let dst_port = tcp_packet.get_destination();
-        let identifier = SessionIdentifier {
-            src_ip,
-            dst_ip,
-            src_port,
-            dst_port,
-        };
-
-        let session = match self.sessions.take(&identifier) {
-            Some(session) => {
-                println!("session found, {:?}", tcp_packet.payload());
-                session
-            }
-            None => {
-                if tcp_packet.get_flags() & TcpFlags::SYN == 0 {
-                    println!("Not first packet of session");
-                    return Ok(());
-                }
-                let event = Event::Connected(TCPConnected { port: src_port });
-                println!("connected event {:?}", event);
-                TCPSession::new(tcp_packet.get_sequence(), identifier)
-            }
-        };
-        self.sessions.insert(session);
-        Ok(())
-    }
-}
 
 fn capture() {
     let interface_name = "eth0";
@@ -226,7 +78,7 @@ fn capture() {
             e
         ),
     };
-    let mut session_manager = SessionManager::new();
+    let mut assembler = TCPAssembler::new();
     loop {
         match rx.next() {
             Ok(packet) => {
@@ -237,7 +89,7 @@ fn capture() {
                         continue;
                     },
                 };
-                match session_manager.add_packet(&packet) {
+                match assembler.add_eth_packet(&packet.payload()) {
                     Ok(_) => {}
                     Err(e) => {
                         println!("add packet error {:?}", e);
