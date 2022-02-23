@@ -17,5 +17,5 @@ jobs:
         toolchain: stable
         components: rustfmt, clippy
     - run: cargo fmt --all -- --check
-    - run: apt install libpcap-dev
+    - run: sudo apt install libpcap-dev
     - run: cargo clippy
