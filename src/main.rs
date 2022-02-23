@@ -120,7 +120,7 @@ fn is_new_connection(flags: u16) -> bool {
 }
 
 fn is_closed_connection(flags: u16) -> bool {
-    0 != flags & (TcpFlags::FIN | TcpFlags::RST)
+    0 != (flags & (TcpFlags::FIN | TcpFlags::RST))
 }
 
 struct ConnectionManager {
@@ -202,8 +202,8 @@ impl ConnectionManager {
 }
 
 fn capture(mut sniffer: Capture<Active>, ports: &[u16]) -> Result<()> {
+    let mut connection_manager = ConnectionManager::new(ports.to_owned());
     while let Ok(packet) = sniffer.next() {
-        let mut connection_manager = ConnectionManager::new(ports.to_owned());
         let packet =
             EthernetPacket::new(&packet).ok_or(anyhow!("Packet is not an ethernet packet"))?;
         let _ = connection_manager.handle_packet(&packet);
