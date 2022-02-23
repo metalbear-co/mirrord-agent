@@ -126,7 +126,7 @@ fn is_closed_connection(flags: u16) -> bool {
 struct ConnectionManager {
     sessions: SessionMap,
     connection_index: ConnectionID,
-    ports: Vec<u16>
+    ports: Vec<u16>,
 }
 
 impl ConnectionManager {
@@ -134,7 +134,7 @@ impl ConnectionManager {
         ConnectionManager {
             sessions: HashMap::new(),
             connection_index: 0,
-            ports
+            ports,
         }
     }
 
@@ -144,11 +144,15 @@ impl ConnectionManager {
 
     fn handle_packet(&mut self, eth_packet: &EthernetPacket) -> Result<()> {
         let ip_packet = match eth_packet.get_ethertype() {
-            EtherTypes::Ipv4 => Ipv4Packet::new(eth_packet.payload()).ok_or(anyhow!("Invalid IPv4 Packet"))?,
+            EtherTypes::Ipv4 => {
+                Ipv4Packet::new(eth_packet.payload()).ok_or(anyhow!("Invalid IPv4 Packet"))?
+            }
             _ => return Err(anyhow!("Not IPv4 Packet")),
         };
         let tcp_packet = match ip_packet.get_next_level_protocol() {
-            IpNextHeaderProtocols::Tcp => TcpPacket::new(ip_packet.payload()).ok_or(anyhow!("Invalid TCP Packet"))?,
+            IpNextHeaderProtocols::Tcp => {
+                TcpPacket::new(ip_packet.payload()).ok_or(anyhow!("Invalid TCP Packet"))?
+            }
             _ => return Err(anyhow!("Not TCP Packet")),
         };
         let dest_port = tcp_packet.get_destination();
@@ -169,15 +173,15 @@ impl ConnectionManager {
                 if !is_client_packet {
                     return Err(anyhow!("Unqualified port"));
                 }
-                
+
                 let id = self.connection_index;
                 self.connection_index += 1;
                 write_message(&Message {
-                  connection_id: Some(id),
-                  event: Event::Connected(TCPConnected {port: dest_port})  
+                    connection_id: Some(id),
+                    event: Event::Connected(TCPConnected { port: dest_port }),
                 });
                 id
-            },
+            }
         };
         if is_client_packet {
             let data = tcp_packet.payload();
@@ -202,11 +206,9 @@ impl ConnectionManager {
     }
 }
 
-
-
 fn capture(mut sniffer: Capture<Active>, ports: &Vec<u16>) -> Result<()> {
     while let Ok(packet) = sniffer.next() {
-        let mut connection_manager=  ConnectionManager::new(ports.clone());
+        let mut connection_manager = ConnectionManager::new(ports.clone());
         let packet =
             EthernetPacket::new(&packet).ok_or(anyhow!("Packet is not an ethernet packet"))?;
         match connection_manager.handle_packet(&packet) {
@@ -215,7 +217,6 @@ fn capture(mut sniffer: Capture<Active>, ports: &Vec<u16>) -> Result<()> {
         }
     }
     Ok(())
-
 }
 
 async fn get_container_namespace(container_id: String) -> Result<String> {
@@ -278,7 +279,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     write_message(&Message {
         connection_id: None,
-        event: Event::Done
+        event: Event::Done,
     });
     Ok(())
 }
