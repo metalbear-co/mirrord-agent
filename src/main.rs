@@ -16,11 +16,11 @@ use std::os::unix::io::{IntoRawFd, RawFd};
 
 use containerd_client::services::v1::containers_client::ContainersClient;
 use containerd_client::services::v1::GetContainerRequest;
-use serde::{Deserialize, Serialize};
-use tonic::Request;
-use rmp_serde::encode::to_vec;
 use pcap::{Capture, Device, Linktype};
 use pnet::packet::Packet;
+use rmp_serde::encode::to_vec;
+use serde::{Deserialize, Serialize};
+use tonic::Request;
 
 mod api;
 mod cli;
