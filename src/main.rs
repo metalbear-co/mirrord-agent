@@ -193,7 +193,9 @@ impl ConnectionManager {
             }
         }
         if is_closed_connection(tcp_flags) {
-            write_event(&Event::TCPEnded);
+            write_event(&Event::TCPEnded(TCPEnded {
+                connection_id: session,
+            }));
         } else {
             self.sessions.insert(identifier, session);
         }

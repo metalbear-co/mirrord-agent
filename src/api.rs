@@ -15,6 +15,11 @@ pub struct TCPData {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct TCPEnded {
+    pub connection_id: ConnectionID,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct AgentError {
     msg: String,
 }
@@ -35,7 +40,7 @@ impl AgentError {
 pub enum Event {
     Connected(TCPConnected),
     InfoMessage(String),
-    TCPEnded,
+    TCPEnded(TCPEnded),
     Data(TCPData),
     Error(AgentError),
     Done,
