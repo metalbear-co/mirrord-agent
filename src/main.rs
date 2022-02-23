@@ -267,6 +267,7 @@ fn write_event(message: &Event) {
     // Rust stdio is buffering lines and doing mayhem.
     let mut stdout = unsafe { ManuallyDrop::new(std::fs::File::from_raw_fd(1)) };
     stdout.write_all(&serialized).unwrap();
+    stdout.flush().unwrap();
 }
 
 #[tokio::main]
