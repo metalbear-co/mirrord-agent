@@ -252,10 +252,21 @@ fn set_namespace(ns_path: &str) -> Result<()> {
 /// Wrapper around main so we can handle all errors in one place.
 async fn wrapped_main() -> Result<()> {
     let args = parse_args();
+    info_message(&format!("mirrod-agent starting with args {:?}", args));
     let namespace = get_container_namespace(args.container_id).await?;
+    info_message(&format!("Using namespace {}", namespace));
     set_namespace(&namespace)?;
+    info_message("Preparing sniffer");
     let sniffer = prepare_sniffer(&args.ports)?;
+    info_message("Capture starting now");
     capture(sniffer, &args.ports)
+}
+
+fn info_message(msg: &str) {
+    write_message(&Message {
+        connection_id: None,
+        event: Event::InfoMessage(msg.to_owned()),
+    });
 }
 
 fn write_message(message: &Message) {

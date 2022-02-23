@@ -31,6 +31,7 @@ impl AgentError {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Event {
     Connected(TCPConnected),
+    InfoMessage(String),
     TCPEnded,
     Data(TCPData),
     Error(AgentError),
