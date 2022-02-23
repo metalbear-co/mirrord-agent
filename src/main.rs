@@ -211,7 +211,7 @@ fn capture(mut sniffer: Capture<Active>, ports: &[u16]) -> Result<()> {
         let mut connection_manager = ConnectionManager::new(ports.to_owned());
         let packet =
             EthernetPacket::new(&packet).ok_or(anyhow!("Packet is not an ethernet packet"))?;
-            if let Ok(_) = connection_manager.handle_packet(&packet) {}
+        if let Ok(_) = connection_manager.handle_packet(&packet) {}
     }
     Ok(())
 }
