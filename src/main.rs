@@ -2,7 +2,15 @@ use anyhow::{anyhow, Result};
 use containerd_client::connect;
 use containerd_client::with_namespace;
 use nix;
+use pcap::Active;
+use pnet::packet::ethernet::EtherTypes;
 use pnet::packet::ethernet::EthernetPacket;
+use pnet::packet::ip::IpNextHeaderProtocols;
+use pnet::packet::ipv4::Ipv4Packet;
+use pnet::packet::tcp::TcpFlags;
+use pnet::packet::tcp::TcpPacket;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 use std::net::Ipv4Addr;
 use std::os::unix::io::{IntoRawFd, RawFd};
@@ -13,8 +21,8 @@ use serde::{Deserialize, Serialize};
 use tonic::Request;
 
 use pcap::{Capture, Device, Linktype};
+use pnet::packet::Packet;
 
-use std::hash::{Hash, Hasher};
 mod api;
 mod cli;
 use api::*;
@@ -42,17 +50,16 @@ struct Spec {
 }
 
 #[derive(Debug, Eq, Copy, Clone)]
-pub struct TCPSession {
+pub struct TCPSessionIdentifier {
     source_addr: Ipv4Addr,
     dest_addr: Ipv4Addr,
     source_port: u16,
     dest_port: u16,
-    connection_id: ConnectionID,
 }
 
-impl PartialEq for TCPSession {
+impl PartialEq for TCPSessionIdentifier {
     /// It's the same session if 4 tuple is same/opposite.
-    fn eq(&self, other: &TCPSession) -> bool {
+    fn eq(&self, other: &TCPSessionIdentifier) -> bool {
         self.source_addr == other.source_addr
             && self.dest_addr == other.dest_addr
             && self.source_port == other.source_port
@@ -64,7 +71,7 @@ impl PartialEq for TCPSession {
     }
 }
 
-impl Hash for TCPSession {
+impl Hash for TCPSessionIdentifier {
     fn hash<H: Hasher>(&self, state: &mut H) {
         if self.source_addr > self.dest_addr {
             self.source_addr.hash(state);
@@ -82,6 +89,9 @@ impl Hash for TCPSession {
         }
     }
 }
+
+type Session = ConnectionID;
+type SessionMap = HashMap<TCPSessionIdentifier, Session>;
 
 fn prepare_sniffer(ports: &Vec<u16>) -> Result<Capture<pcap::Active>> {
     let interface_names_match = |iface: &Device| iface.name == DEFAULT_INTERFACE_NAME;
@@ -106,41 +116,107 @@ fn prepare_sniffer(ports: &Vec<u16>) -> Result<Capture<pcap::Active>> {
     Ok(cap)
 }
 
-fn capture(ports: &Vec<u16>) -> Result<()> {
-    let mut cap = prepare_sniffer(ports)?;
-    while let Ok(packet) = cap.next() {
+fn is_new_connection(flags: u16) -> bool {
+    flags == TcpFlags::SYN
+}
+
+fn is_closed_connection(flags: u16) -> bool {
+    0 != flags & (TcpFlags::FIN | TcpFlags::RST)
+}
+
+struct ConnectionManager {
+    sessions: SessionMap,
+    connection_index: ConnectionID,
+    ports: Vec<u16>
+}
+
+impl ConnectionManager {
+    fn new(ports: Vec<u16>) -> Self {
+        ConnectionManager {
+            sessions: HashMap::new(),
+            connection_index: 0,
+            ports
+        }
+    }
+
+    fn qualified_port(&self, port: u16) -> bool {
+        self.ports.contains(&port)
+    }
+
+    fn handle_packet(&mut self, eth_packet: &EthernetPacket) -> Result<()> {
+        let ip_packet = match eth_packet.get_ethertype() {
+            EtherTypes::Ipv4 => Ipv4Packet::new(eth_packet.payload()).ok_or(anyhow!("Invalid IPv4 Packet"))?,
+            _ => return Err(anyhow!("Not IPv4 Packet")),
+        };
+        let tcp_packet = match ip_packet.get_next_level_protocol() {
+            IpNextHeaderProtocols::Tcp => TcpPacket::new(ip_packet.payload()).ok_or(anyhow!("Invalid TCP Packet"))?,
+            _ => return Err(anyhow!("Not TCP Packet")),
+        };
+        let dest_port = tcp_packet.get_destination();
+        let tcp_flags = tcp_packet.get_flags();
+        let identifier = TCPSessionIdentifier {
+            source_addr: ip_packet.get_source(),
+            dest_addr: ip_packet.get_destination(),
+            source_port: tcp_packet.get_source(),
+            dest_port,
+        };
+        let is_client_packet = self.qualified_port(dest_port);
+        let session = match self.sessions.remove(&identifier) {
+            Some(session) => session,
+            None => {
+                if !is_new_connection(tcp_flags) {
+                    return Err(anyhow!("Mid session traffic"));
+                }
+                if !is_client_packet {
+                    return Err(anyhow!("Unqualified port"));
+                }
+                
+                let id = self.connection_index;
+                self.connection_index += 1;
+                write_message(&Message {
+                  connection_id: Some(id),
+                  event: Event::Connected(TCPConnected {port: dest_port})  
+                });
+                id
+            },
+        };
+        if is_client_packet {
+            let data = tcp_packet.payload();
+            if data.len() > 0 {
+                write_message(&Message {
+                    connection_id: Some(session),
+                    event: Event::Data(TCPData {
+                        data: data.to_vec(),
+                    }),
+                });
+            }
+        }
+        if is_closed_connection(tcp_flags) {
+            write_message(&Message {
+                connection_id: Some(session),
+                event: Event::TCPEnded,
+            });
+        } else {
+            self.sessions.insert(identifier, session);
+        }
+        Ok(())
+    }
+}
+
+
+
+fn capture(mut sniffer: Capture<Active>, ports: &Vec<u16>) -> Result<()> {
+    while let Ok(packet) = sniffer.next() {
+        let mut connection_manager=  ConnectionManager::new(ports.clone());
         let packet =
             EthernetPacket::new(&packet).ok_or(anyhow!("Packet is not an ethernet packet"))?;
-        // match assembler.add_eth_packet(&packet.payload()) {
-        //     Ok(_) => {}
-        //     Err(e) => {
-        //         println!("add packet error {:?}", e);
-        //     }
-        // }
+        match connection_manager.handle_packet(&packet) {
+            Ok(_) => {}
+            Err(_) => {}
+        }
     }
     Ok(())
-    // loop {
-    //     match rx.next() {
-    //         Ok(packet) => {
-    //             let packet = match EthernetPacket::new(packet) {
-    //                 Some(packet) => packet,
-    //                 None => continue,
-    //             };
-    //             match assembler.add_eth_packet(&packet.payload()) {
-    //                 Ok(_) => {}
-    //                 Err(e) => {
-    //                     println!("add packet error {:?}", e);
-    //                 }
-    //             }
-    //         }
-    //         Err(e) => {
-    //             write_message(&Message {
-    //                 event: Event::Error(AgentError::from_error(Box::new(e))),
-    //                 connection_id: None,
-    //             });
-    //         }
-    //     }
-    // }
+
 }
 
 async fn get_container_namespace(container_id: String) -> Result<String> {
@@ -164,7 +240,8 @@ async fn get_container_namespace(container_id: String) -> Result<String> {
         .iter()
         .find(|ns| ns.ns_type == "network")
         .ok_or(anyhow!("network namespace not found"))?
-        .path.as_ref()
+        .path
+        .as_ref()
         .ok_or(anyhow!("no network namespace path"))?;
     Ok(ns_path.to_owned())
 }
@@ -180,7 +257,8 @@ async fn wrapped_main() -> Result<()> {
     let args = parse_args();
     let namespace = get_container_namespace(args.container_id).await?;
     set_namespace(&namespace)?;
-    capture(&args.ports)
+    let sniffer = prepare_sniffer(&args.ports)?;
+    capture(sniffer, &args.ports)
 }
 
 fn write_message(message: &Message) -> () {
@@ -199,5 +277,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         }
     }
+    write_message(&Message {
+        connection_id: None,
+        event: Event::Done
+    });
     Ok(())
 }

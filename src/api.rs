@@ -9,7 +9,7 @@ pub struct TCPConnected {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct TCPData {
-    data: Vec<u8>,
+    pub data: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -18,8 +18,10 @@ pub struct AgentError {
 }
 
 impl AgentError {
-    pub fn from_error<T>(error: T) -> AgentError 
-    where T: ToString {
+    pub fn from_error<T>(error: T) -> AgentError
+    where
+        T: ToString,
+    {
         AgentError {
             msg: error.to_string(),
         }
@@ -29,6 +31,7 @@ impl AgentError {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Event {
     Connected(TCPConnected),
+    TCPEnded,
     Data(TCPData),
     Error(AgentError),
     Done,
