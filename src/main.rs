@@ -18,7 +18,7 @@ use containerd_client::services::v1::containers_client::ContainersClient;
 use containerd_client::services::v1::GetContainerRequest;
 use serde::{Deserialize, Serialize};
 use tonic::Request;
-
+use rmp_serde::encode::to_vec;
 use pcap::{Capture, Device, Linktype};
 use pnet::packet::Packet;
 
@@ -259,8 +259,8 @@ async fn wrapped_main() -> Result<()> {
 }
 
 fn write_message(message: &Message) {
-    let serialized = serde_json::to_string(&message).unwrap();
-    io::stdout().write_all(serialized.as_bytes()).unwrap();
+    let serialized = to_vec(message).unwrap();
+    io::stdout().write_all(&serialized).unwrap();
 }
 
 #[tokio::main]
