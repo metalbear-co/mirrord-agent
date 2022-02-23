@@ -92,7 +92,7 @@ impl Hash for TCPSessionIdentifier {
 type Session = ConnectionID;
 type SessionMap = HashMap<TCPSessionIdentifier, Session>;
 
-fn prepare_sniffer(ports: &Vec<u16>) -> Result<Capture<pcap::Active>> {
+fn prepare_sniffer(ports: &[u16]) -> Result<Capture<pcap::Active>> {
     let interface_names_match = |iface: &Device| iface.name == DEFAULT_INTERFACE_NAME;
     let interfaces = Device::list()?;
     let interface = interfaces
@@ -185,7 +185,7 @@ impl ConnectionManager {
         };
         if is_client_packet {
             let data = tcp_packet.payload();
-            if data.len() > 0 {
+            if !data.is_empty() {
                 write_message(&Message {
                     connection_id: Some(session),
                     event: Event::Data(TCPData {
@@ -206,15 +206,12 @@ impl ConnectionManager {
     }
 }
 
-fn capture(mut sniffer: Capture<Active>, ports: &Vec<u16>) -> Result<()> {
+fn capture(mut sniffer: Capture<Active>, ports: &[u16]) -> Result<()> {
     while let Ok(packet) = sniffer.next() {
-        let mut connection_manager = ConnectionManager::new(ports.clone());
+        let mut connection_manager = ConnectionManager::new(ports.to_owned());
         let packet =
             EthernetPacket::new(&packet).ok_or(anyhow!("Packet is not an ethernet packet"))?;
-        match connection_manager.handle_packet(&packet) {
-            Ok(_) => {}
-            Err(_) => {}
-        }
+            if let Ok(_) = connection_manager.handle_packet(&packet) {}
     }
     Ok(())
 }
@@ -246,7 +243,7 @@ async fn get_container_namespace(container_id: String) -> Result<String> {
     Ok(ns_path.to_owned())
 }
 
-fn set_namespace(ns_path: &String) -> Result<()> {
+fn set_namespace(ns_path: &str) -> Result<()> {
     let fd: RawFd = std::fs::File::open(ns_path)?.into_raw_fd();
     nix::sched::setns(fd, nix::sched::CloneFlags::CLONE_NEWNET)?;
     Ok(())

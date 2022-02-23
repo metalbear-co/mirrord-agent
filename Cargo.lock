@@ -412,23 +412,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aab8fc367588b89dcee83ab0fd66b72b50b72fa1904d7095045ace2b0c81c35"
 
 [[package]]
-name = "lala"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "containerd-client",
- "nix",
- "pcap",
- "pnet",
- "rmp-serde",
- "serde",
- "serde_json",
- "tokio",
- "tonic",
-]
-
-[[package]]
 name = "lazy_static"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -503,6 +486,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9f1c5b025cda876f66ef43a113f91ebc9f4ccef34843000e0adf6ebbab84e21"
 dependencies = [
  "winapi",
+]
+
+[[package]]
+name = "mirrord-agent"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "containerd-client",
+ "nix",
+ "pcap",
+ "pnet",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tonic",
 ]
 
 [[package]]
