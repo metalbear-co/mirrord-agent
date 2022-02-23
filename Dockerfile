@@ -1,5 +1,5 @@
 FROM --platform=linux/x86-64 rust:latest as build-env
-RUN apt update && apt install libpcap-dev
+RUN apt update && apt install -y libpcap-dev
 WORKDIR /app
 COPY . /app
 RUN cargo build --release
