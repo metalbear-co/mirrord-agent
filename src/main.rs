@@ -1,7 +1,6 @@
 use anyhow::{anyhow, Result};
 use containerd_client::connect;
 use containerd_client::with_namespace;
-use nix;
 use pcap::Active;
 use pnet::packet::ethernet::EtherTypes;
 use pnet::packet::ethernet::EthernetPacket;
@@ -261,7 +260,7 @@ async fn wrapped_main() -> Result<()> {
     capture(sniffer, &args.ports)
 }
 
-fn write_message(message: &Message) -> () {
+fn write_message(message: &Message) {
     let serialized = serde_json::to_string(&message).unwrap();
     io::stdout().write_all(serialized.as_bytes()).unwrap();
 }
