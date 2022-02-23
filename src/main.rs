@@ -261,6 +261,7 @@ fn info_message(msg: &str) {
 }
 
 fn write_event(message: &Event) {
+    println!("?");
     let serialized = to_vec(message).unwrap();
     io::stdout().write_all(&serialized).unwrap();
     io::stdout().flush().unwrap();
