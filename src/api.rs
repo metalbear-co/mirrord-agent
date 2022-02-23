@@ -4,11 +4,13 @@ pub type ConnectionID = u64;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct TCPConnected {
+    pub connection_id: ConnectionID,
     pub port: u16,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct TCPData {
+    pub connection_id: ConnectionID,
     pub data: Vec<u8>,
 }
 
@@ -29,6 +31,7 @@ impl AgentError {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(tag = "type", content = "content")]
 pub enum Event {
     Connected(TCPConnected),
     InfoMessage(String),
@@ -36,10 +39,4 @@ pub enum Event {
     Data(TCPData),
     Error(AgentError),
     Done,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Message {
-    pub connection_id: Option<ConnectionID>,
-    pub event: Event,
 }

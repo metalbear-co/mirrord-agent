@@ -176,29 +176,24 @@ impl ConnectionManager {
 
                 let id = self.connection_index;
                 self.connection_index += 1;
-                write_message(&Message {
-                    connection_id: Some(id),
-                    event: Event::Connected(TCPConnected { port: dest_port }),
-                });
+                write_event(&Event::Connected(TCPConnected {
+                    port: dest_port,
+                    connection_id: id,
+                }));
                 id
             }
         };
         if is_client_packet {
             let data = tcp_packet.payload();
             if !data.is_empty() {
-                write_message(&Message {
-                    connection_id: Some(session),
-                    event: Event::Data(TCPData {
-                        data: data.to_vec(),
-                    }),
-                });
+                write_event(&Event::Data(TCPData {
+                    data: data.to_vec(),
+                    connection_id: session,
+                }));
             }
         }
         if is_closed_connection(tcp_flags) {
-            write_message(&Message {
-                connection_id: Some(session),
-                event: Event::TCPEnded,
-            });
+            write_event(&Event::TCPEnded);
         } else {
             self.sessions.insert(identifier, session);
         }
@@ -218,7 +213,6 @@ fn capture(mut sniffer: Capture<Active>, ports: &[u16]) -> Result<()> {
 
 async fn get_container_namespace(container_id: String) -> Result<String> {
     let channel = connect(CONTAINERD_SOCK_PATH).await?;
-
     let mut client = ContainersClient::new(channel);
     let request = GetContainerRequest { id: container_id };
     let request = with_namespace!(request, DEFAULT_CONTAINERD_NAMESPACE);
@@ -263,15 +257,13 @@ async fn wrapped_main() -> Result<()> {
 }
 
 fn info_message(msg: &str) {
-    write_message(&Message {
-        connection_id: None,
-        event: Event::InfoMessage(msg.to_owned()),
-    });
+    write_event(&Event::InfoMessage(msg.to_owned()));
 }
 
-fn write_message(message: &Message) {
+fn write_event(message: &Event) {
     let serialized = to_vec(message).unwrap();
     io::stdout().write_all(&serialized).unwrap();
+    io::stdout().flush().unwrap();
 }
 
 #[tokio::main]
@@ -279,15 +271,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match wrapped_main().await {
         Ok(_) => (),
         Err(e) => {
-            write_message(&Message {
-                event: Event::Error(AgentError::from_error(e)),
-                connection_id: None,
-            });
+            write_event(&Event::Error(AgentError::from_error(e)));
         }
     }
-    write_message(&Message {
-        connection_id: None,
-        event: Event::Done,
-    });
+    write_event(&Event::Done);
     Ok(())
 }
