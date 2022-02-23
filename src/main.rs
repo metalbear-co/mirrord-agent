@@ -98,7 +98,9 @@ fn prepare_sniffer(ports: &[u16]) -> Result<Capture<pcap::Active>> {
         .find(interface_names_match)
         .ok_or(anyhow!("Interface not found"))?;
 
-    let mut cap = Capture::from_device(interface)?.immediate_mode(true).open()?;
+    let mut cap = Capture::from_device(interface)?
+        .immediate_mode(true)
+        .open()?;
     cap.set_datalink(Linktype::ETHERNET)?;
     // Build a filter of format: "tcp port (80 or 443 or 50 or 90)"
     let filter = format!(
