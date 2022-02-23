@@ -11,7 +11,7 @@ pub struct TCPConnected {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct TCPData {
     pub connection_id: ConnectionID,
-    pub data: Vec<u8>,
+    pub data: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

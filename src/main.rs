@@ -15,12 +15,10 @@ use std::mem::ManuallyDrop;
 use std::net::Ipv4Addr;
 use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
 
-
 use containerd_client::services::v1::containers_client::ContainersClient;
 use containerd_client::services::v1::GetContainerRequest;
 use pcap::{Capture, Device, Linktype};
 use pnet::packet::Packet;
-use rmp_serde::encode::to_vec;
 use serde::{Deserialize, Serialize};
 use tonic::Request;
 
@@ -189,7 +187,7 @@ impl ConnectionManager {
             let data = tcp_packet.payload();
             if !data.is_empty() {
                 write_event(&Event::Data(TCPData {
-                    data: data.to_vec(),
+                    data: base64::encode(data),
                     connection_id: session,
                 }));
             }
@@ -263,9 +261,8 @@ fn info_message(msg: &str) {
 }
 
 fn write_event(message: &Event) {
-    let serialized = to_vec(message).unwrap();
-    // Rust stdio is buffering lines and doing mayhem.
-    let mut stdout = unsafe { ManuallyDrop::new(std::fs::File::from_raw_fd(1)) };
+    let serialized = serde_json::to_vec(message).unwrap();
+    let mut stdout = std::io::stdout();
     stdout.write_all(&serialized).unwrap();
     stdout.flush().unwrap();
 }
