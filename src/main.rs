@@ -261,8 +261,9 @@ fn info_message(msg: &str) {
 }
 
 fn write_event(message: &Event) {
-    println!("?");
     let serialized = to_vec(message).unwrap();
+    // kubectl doesn't show it unless we add newlines..?
+    serialized.push(10);
     io::stdout().write_all(&serialized).unwrap();
     io::stdout().flush().unwrap();
 }
