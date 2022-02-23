@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ master ]
+    branches: [ main ]
   pull_request:
-    branches: [ master ]
+    branches: [ main ]
 
 jobs:
   lint:
@@ -17,4 +17,5 @@ jobs:
         toolchain: stable
         components: rustfmt, clippy
     - run: cargo fmt --all -- --check
-    - run: cargo clippy
+    - run: sudo apt install libpcap-dev
+    - run: cargo clippy -- -D warnings
