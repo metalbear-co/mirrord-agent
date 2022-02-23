@@ -260,11 +260,9 @@ fn info_message(msg: &str) {
     write_event(&Event::InfoMessage(msg.to_owned()));
 }
 
-fn write_event(message: &Event) {
-    let serialized = serde_json::to_vec(message).unwrap();
-    let mut stdout = std::io::stdout();
-    stdout.write_all(&serialized).unwrap();
-    stdout.flush().unwrap();
+fn write_event(event: &Event) {
+    let serialized = serde_json::to_string(&event).unwrap();
+    println!("{}", serialized);
 }
 
 #[tokio::main]
