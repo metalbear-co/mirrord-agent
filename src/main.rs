@@ -11,6 +11,7 @@ use pnet::packet::tcp::TcpPacket;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
+use std::mem::ManuallyDrop;
 use std::net::Ipv4Addr;
 use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
 
@@ -264,9 +265,8 @@ fn info_message(msg: &str) {
 fn write_event(message: &Event) {
     let serialized = to_vec(message).unwrap();
     // Rust stdio is buffering lines and doing mayhem.
-    let mut stdout = unsafe { std::fs::File::from_raw_fd(1) };
+    let mut stdout = unsafe { ManuallyDrop::new(std::fs::File::from_raw_fd(1)) };
     stdout.write_all(&serialized).unwrap();
-    stdout.flush().unwrap();
 }
 
 #[tokio::main]
