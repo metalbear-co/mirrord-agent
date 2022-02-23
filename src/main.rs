@@ -10,9 +10,10 @@ use pnet::packet::tcp::TcpFlags;
 use pnet::packet::tcp::TcpPacket;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::io::{self, Write};
+use std::io::Write;
 use std::net::Ipv4Addr;
-use std::os::unix::io::{IntoRawFd, RawFd};
+use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
+
 
 use containerd_client::services::v1::containers_client::ContainersClient;
 use containerd_client::services::v1::GetContainerRequest;
@@ -262,10 +263,10 @@ fn info_message(msg: &str) {
 
 fn write_event(message: &Event) {
     let serialized = to_vec(message).unwrap();
-    // kubectl doesn't show it unless we add newlines..?
-    serialized.push(10);
-    io::stdout().write_all(&serialized).unwrap();
-    io::stdout().flush().unwrap();
+    // Rust stdio is buffering lines and doing mayhem.
+    let mut stdout = unsafe { std::fs::File::from_raw_fd(1) };
+    stdout.write_all(&serialized).unwrap();
+    stdout.flush().unwrap();
 }
 
 #[tokio::main]
