@@ -32,7 +32,8 @@ jobs:
       run: kubectl apply -f e2e/app.yaml
     - name: Build image
       run: |
-        minikube image build --push -t mirrord:0.0.0 .
+        minikube image build -t mirrord:0.0.0 .
+        minikube image load mirrord:0.0.0
     - uses: actions/setup-python@v2
       with:
         python-version: "3.10"
