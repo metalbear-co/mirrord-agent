@@ -33,6 +33,7 @@ jobs:
     - name: Build image
       run: |
         minikube image build -t local/mirrord-agent .
+        minikube image load local/mirrord-agent:latest
     - uses: actions/setup-python@v2
       with:
         python-version: "3.10"
