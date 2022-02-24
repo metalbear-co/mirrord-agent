@@ -56,7 +56,7 @@ def create_pod_definition(container_id: str):
             containers=[
                 client.V1Container(
                     name="mirrord-agent",
-                    image="local/mirrord-agent:latest",
+                    image="mirrord:0.0.0",
                     security_context=client.V1SecurityContext(privileged=True),
                     volume_mounts=[
                         client.V1VolumeMount(
