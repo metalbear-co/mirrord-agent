@@ -32,8 +32,7 @@ jobs:
       run: kubectl apply -f e2e/app.yaml
     - name: Build image
       run: |
-        eval $(minikube -p minikube docker-env)
-        docker build -f ./Dockerfile -t local/mirrord-agent .
+        minikube image build -t local/mirrord-agent .
     - uses: actions/setup-python@v2
       with:
         python-version: "3.10"
