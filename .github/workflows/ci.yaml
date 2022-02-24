@@ -42,4 +42,3 @@ jobs:
     - name: Run test script
       run: |
         python e2e/main.py $(minikube service nginx --url)
-      
