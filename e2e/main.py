@@ -3,6 +3,7 @@ import random
 import string
 import sys
 import time
+import os
 
 import httpx
 from kubernetes import client, config, watch
@@ -56,7 +57,7 @@ def create_pod_definition(container_id: str):
             containers=[
                 client.V1Container(
                     name="mirrord-agent",
-                    image="mirrord:0.0.0",
+                    image=f"ghcr.io/metalbear-co/mirrord-agent-ci:{os.environ['GITHUB_SHA']}",
                     security_context=client.V1SecurityContext(privileged=True),
                     volume_mounts=[
                         client.V1VolumeMount(
