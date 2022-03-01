@@ -129,7 +129,7 @@ dependencies = [
 [[package]]
 name = "containerd-client"
 version = "0.1.2"
-source = "git+https://github.com/containerd/rust-extensions#3905a44f0f38f88787eed969b0fbdf14377156f6"
+source = "git+https://github.com/containerd/rust-extensions#375bc65791fd002cfbe822ee3157ac2a9f799bd5"
 dependencies = [
  "prost",
  "prost-types",
