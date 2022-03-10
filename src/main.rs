@@ -96,7 +96,7 @@ fn prepare_sniffer(ports: &[u16]) -> Result<Capture<pcap::Active>> {
     let interface = interfaces
         .into_iter()
         .find(interface_names_match)
-        .ok_or(anyhow!("Interface not found"))?;
+        .ok_or_else(|| anyhow!("Interface not found"))?;
 
     let mut cap = Capture::from_device(interface)?
         .immediate_mode(true)
@@ -144,14 +144,13 @@ impl ConnectionManager {
 
     fn handle_packet(&mut self, eth_packet: &EthernetPacket) -> Result<()> {
         let ip_packet = match eth_packet.get_ethertype() {
-            EtherTypes::Ipv4 => {
-                Ipv4Packet::new(eth_packet.payload()).ok_or(anyhow!("Invalid IPv4 Packet"))?
-            }
+            EtherTypes::Ipv4 => Ipv4Packet::new(eth_packet.payload())
+                .ok_or_else(|| anyhow!("Invalid IPv4 Packet"))?,
             _ => return Err(anyhow!("Not IPv4 Packet")),
         };
         let tcp_packet = match ip_packet.get_next_level_protocol() {
             IpNextHeaderProtocols::Tcp => {
-                TcpPacket::new(ip_packet.payload()).ok_or(anyhow!("Invalid TCP Packet"))?
+                TcpPacket::new(ip_packet.payload()).ok_or_else(|| anyhow!("Invalid TCP Packet"))?
             }
             _ => return Err(anyhow!("Not TCP Packet")),
         };
@@ -206,8 +205,8 @@ impl ConnectionManager {
 fn capture(mut sniffer: Capture<Active>, ports: &[u16]) -> Result<()> {
     let mut connection_manager = ConnectionManager::new(ports.to_owned());
     while let Ok(packet) = sniffer.next() {
-        let packet =
-            EthernetPacket::new(&packet).ok_or(anyhow!("Packet is not an ethernet packet"))?;
+        let packet = EthernetPacket::new(&packet)
+            .ok_or_else(|| anyhow!("Packet is not an ethernet packet"))?;
         let _ = connection_manager.handle_packet(&packet);
     }
     Ok(())
@@ -220,11 +219,13 @@ async fn get_container_namespace(container_id: String) -> Result<String> {
     let request = with_namespace!(request, DEFAULT_CONTAINERD_NAMESPACE);
     let resp = client.get(request).await?;
     let resp = resp.into_inner();
-    let container = resp.container.ok_or(anyhow!("container not found"))?;
+    let container = resp
+        .container
+        .ok_or_else(|| anyhow!("container not found"))?;
     let spec: Spec = serde_json::from_slice(
         &container
             .spec
-            .ok_or(anyhow!("invalid data from containerd"))?
+            .ok_or_else(|| anyhow!("invalid data from containerd"))?
             .value,
     )?;
     let ns_path = spec
@@ -232,10 +233,10 @@ async fn get_container_namespace(container_id: String) -> Result<String> {
         .namespaces
         .iter()
         .find(|ns| ns.ns_type == "network")
-        .ok_or(anyhow!("network namespace not found"))?
+        .ok_or_else(|| anyhow!("network namespace not found"))?
         .path
         .as_ref()
-        .ok_or(anyhow!("no network namespace path"))?;
+        .ok_or_else(|| anyhow!("no network namespace path"))?;
     Ok(ns_path.to_owned())
 }
 
