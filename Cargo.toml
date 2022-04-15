@@ -11,7 +11,7 @@ tokio = { version = "1", features = ["full"] }
 tonic = "0.6.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-pcap = "0.9.1"
+pcap = "0.9.2"
 pnet = "0.29.0"
 nix = "0.23.1"
 anyhow = "1"
