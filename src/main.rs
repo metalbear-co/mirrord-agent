@@ -1,281 +1,204 @@
 use anyhow::{anyhow, Result};
-use containerd_client::connect;
-use containerd_client::with_namespace;
+
+
+use tracing::{debug, info, error};
 use pcap::Active;
-use pnet::packet::ethernet::EtherTypes;
-use pnet::packet::ethernet::EthernetPacket;
-use pnet::packet::ip::IpNextHeaderProtocols;
-use pnet::packet::ipv4::Ipv4Packet;
-use pnet::packet::tcp::TcpFlags;
-use pnet::packet::tcp::TcpPacket;
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::net::Ipv4Addr;
-use std::os::unix::io::{IntoRawFd, RawFd};
+use tokio::task;
+use tokio::select;
+use tokio_stream::StreamExt;
+use futures::SinkExt;
 
-use containerd_client::services::v1::containers_client::ContainersClient;
-use containerd_client::services::v1::GetContainerRequest;
-use pcap::{Capture, Device, Linktype};
-use pnet::packet::Packet;
-use serde::{Deserialize, Serialize};
-use tonic::Request;
+use std::borrow::Borrow;
+use std::collections::HashSet;
+use std::hash::{Hasher, Hash};
+// use mirrord_protocol::{MirrordCodec, MirrordMessage};
+use std::net::{Ipv4Addr, SocketAddrV4};
+use std::sync::Arc;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::time::{timeout_at, Duration, Instant};
 
-mod api;
+use pcap::Capture;
+use tokio::sync::{
+    mpsc::{self, Receiver, Sender},
+    RwLock
+};
+
 mod cli;
-use api::*;
+mod runtime;
+mod sniffer;
+mod protocol;
+use protocol::{ClientMessage, DaemonMessage, DaemonCodec};
 use cli::parse_args;
+use runtime::{get_container_namespace, set_namespace};
+use sniffer::packet_worker;
 
-const CONTAINERD_SOCK_PATH: &str = "/run/containerd/containerd.sock";
-const DEFAULT_CONTAINERD_NAMESPACE: &str = "k8s.io";
-const DEFAULT_INTERFACE_NAME: &str = "eth0";
+// fn capture(mut sniffer: Capture<Active>, ports: &[u16], tx: Sender<pcap::Packet>) -> Result<()> {
+//     while let Ok(packet) = sniffer.next() {
+//         tx.blocking_send(packet)?;
+//     }
+//     Ok(())
+//     // let mut connection_manager = ConnectionManager::new(ports.to_owned());
+//     // while let Ok(packet) = sniffer.next() {
+//     //     let packet = EthernetPacket::new(&packet)
+//     //         .ok_or_else(|| anyhow!("Packet is not an ethernet packet"))?;
+//     //     let _ = connection_manager.handle_packet(&packet);
+//     // }
+//     // Ok(())
+// }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct Namespace {
-    #[serde(rename = "type")]
-    ns_type: String,
-    path: Option<String>,
+type PeerID = u32;
+
+#[derive(Debug)]
+struct Peer {
+    id: PeerID,
+    channel: mpsc::Sender<DaemonMessage>
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct LinuxInfo {
-    namespaces: Vec<Namespace>,
+impl Peer {
+    pub fn new(id: PeerID, channel: mpsc::Sender<DaemonMessage>) -> Peer {
+        Peer {
+            id,
+            channel
+        }
+    }
 }
+impl Eq for Peer {}
 
-#[derive(Serialize, Deserialize, Debug)]
-struct Spec {
-    linux: LinuxInfo,
-}
-
-#[derive(Debug, Eq, Copy, Clone)]
-pub struct TCPSessionIdentifier {
-    source_addr: Ipv4Addr,
-    dest_addr: Ipv4Addr,
-    source_port: u16,
-    dest_port: u16,
-}
-
-impl PartialEq for TCPSessionIdentifier {
-    /// It's the same session if 4 tuple is same/opposite.
-    fn eq(&self, other: &TCPSessionIdentifier) -> bool {
-        self.source_addr == other.source_addr
-            && self.dest_addr == other.dest_addr
-            && self.source_port == other.source_port
-            && self.dest_port == other.dest_port
-            || self.source_addr == other.dest_addr
-                && self.dest_addr == other.source_addr
-                && self.source_port == other.dest_port
-                && self.dest_port == other.source_port
+impl PartialEq for Peer {
+    fn eq(&self, other: &Peer) -> bool {
+        self.id == other.id
     }
 }
 
-impl Hash for TCPSessionIdentifier {
+
+impl Hash for Peer {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        if self.source_addr > self.dest_addr {
-            self.source_addr.hash(state);
-            self.dest_addr.hash(state);
-        } else {
-            self.dest_addr.hash(state);
-            self.source_addr.hash(state);
-        }
-        if self.source_port > self.dest_port {
-            self.source_port.hash(state);
-            self.dest_port.hash(state);
-        } else {
-            self.dest_port.hash(state);
-            self.source_port.hash(state);
-        }
+        self.id.hash(state);
     }
 }
 
-type Session = ConnectionID;
-type SessionMap = HashMap<TCPSessionIdentifier, Session>;
-
-fn prepare_sniffer(ports: &[u16]) -> Result<Capture<pcap::Active>> {
-    let interface_names_match = |iface: &Device| iface.name == DEFAULT_INTERFACE_NAME;
-    let interfaces = Device::list()?;
-    let interface = interfaces
-        .into_iter()
-        .find(interface_names_match)
-        .ok_or_else(|| anyhow!("Interface not found"))?;
-
-    let mut cap = Capture::from_device(interface)?
-        .immediate_mode(true)
-        .open()?;
-    cap.set_datalink(Linktype::ETHERNET)?;
-    // Build a filter of format: "tcp port (80 or 443 or 50 or 90)"
-    let filter = format!(
-        "tcp port ({})",
-        ports
-            .iter()
-            .map(|p| p.to_string())
-            .collect::<Vec<String>>()
-            .join(" or")
-    );
-    cap.filter(&filter, true)?;
-    Ok(cap)
+impl Borrow<PeerID> for Peer {
+    fn borrow(&self) -> &PeerID {
+        &self.id
+    }
 }
 
-fn is_new_connection(flags: u16) -> bool {
-    flags == TcpFlags::SYN
+#[derive(Debug)]
+struct State {
+   pub peers: HashSet<Peer>,
+   current_id: PeerID,
 }
 
-fn is_closed_connection(flags: u16) -> bool {
-    0 != (flags & (TcpFlags::FIN | TcpFlags::RST))
-}
-
-struct ConnectionManager {
-    sessions: SessionMap,
-    connection_index: ConnectionID,
-    ports: Vec<u16>,
-}
-
-impl ConnectionManager {
-    fn new(ports: Vec<u16>) -> Self {
-        ConnectionManager {
-            sessions: HashMap::new(),
-            connection_index: 0,
-            ports,
-        }
+impl State {
+    pub fn new() -> State {
+        State { peers: HashSet::new(), current_id : 0 }
     }
 
-    fn qualified_port(&self, port: u16) -> bool {
-        self.ports.contains(&port)
+    pub fn generate_id(&mut self) -> PeerID {
+        let res = self.current_id;
+        self.current_id += 1;
+        res
     }
+}
 
-    fn handle_packet(&mut self, eth_packet: &EthernetPacket) -> Result<()> {
-        let ip_packet = match eth_packet.get_ethertype() {
-            EtherTypes::Ipv4 => Ipv4Packet::new(eth_packet.payload())
-                .ok_or_else(|| anyhow!("Invalid IPv4 Packet"))?,
-            _ => return Err(anyhow!("Not IPv4 Packet")),
-        };
-        let tcp_packet = match ip_packet.get_next_level_protocol() {
-            IpNextHeaderProtocols::Tcp => {
-                TcpPacket::new(ip_packet.payload()).ok_or_else(|| anyhow!("Invalid TCP Packet"))?
-            }
-            _ => return Err(anyhow!("Not TCP Packet")),
-        };
-        let dest_port = tcp_packet.get_destination();
-        let tcp_flags = tcp_packet.get_flags();
-        let identifier = TCPSessionIdentifier {
-            source_addr: ip_packet.get_source(),
-            dest_addr: ip_packet.get_destination(),
-            source_port: tcp_packet.get_source(),
-            dest_port,
-        };
-        let is_client_packet = self.qualified_port(dest_port);
-        let session = match self.sessions.remove(&identifier) {
-            Some(session) => session,
-            None => {
-                if !is_new_connection(tcp_flags) {
-                    return Err(anyhow!("Mid session traffic"));
-                }
-                if !is_client_packet {
-                    return Err(anyhow!("Unqualified port"));
-                }
 
-                let id = self.connection_index;
-                self.connection_index += 1;
-                write_event(&Event::Connected(TCPConnected {
-                    port: dest_port,
-                    connection_id: id,
-                }));
-                id
-            }
-        };
-        if is_client_packet {
-            let data = tcp_packet.payload();
-            if !data.is_empty() {
-                write_event(&Event::Data(TCPData {
-                    data: base64::encode(data),
-                    connection_id: session,
-                }));
+#[derive(Debug)]
+struct PeerMessage {
+    msg: ClientMessage,
+    peer_id: PeerID
+}
+
+async fn peer_handler(mut rx: mpsc::Receiver<DaemonMessage>, tx: mpsc::Sender<PeerMessage>, stream: TcpStream, peer_id: PeerID) -> Result<()>
+{
+    let mut stream = actix_codec::Framed::new(stream, DaemonCodec::new());
+    loop {
+        select! {
+            Some(message) = stream.next() => {
+                let message = PeerMessage {
+                    msg: message?,
+                    peer_id
+                };
+                debug!("client sent message {:?}", &message);
+                tx.send(message).await?;
+            },
+            Some(message) = rx.recv() => {
+                debug!("send message to client {:?}", &message);
+                stream.send(message).await?;
             }
         }
-        if is_closed_connection(tcp_flags) {
-            write_event(&Event::TCPEnded(TCPEnded {
-                connection_id: session,
-            }));
-        } else {
-            self.sessions.insert(identifier, session);
-        }
-        Ok(())
-    }
-}
-
-fn capture(mut sniffer: Capture<Active>, ports: &[u16]) -> Result<()> {
-    let mut connection_manager = ConnectionManager::new(ports.to_owned());
-    while let Ok(packet) = sniffer.next() {
-        let packet = EthernetPacket::new(&packet)
-            .ok_or_else(|| anyhow!("Packet is not an ethernet packet"))?;
-        let _ = connection_manager.handle_packet(&packet);
     }
     Ok(())
 }
 
-async fn get_container_namespace(container_id: String) -> Result<String> {
-    let channel = connect(CONTAINERD_SOCK_PATH).await?;
-    let mut client = ContainersClient::new(channel);
-    let request = GetContainerRequest { id: container_id };
-    let request = with_namespace!(request, DEFAULT_CONTAINERD_NAMESPACE);
-    let resp = client.get(request).await?;
-    let resp = resp.into_inner();
-    let container = resp
-        .container
-        .ok_or_else(|| anyhow!("container not found"))?;
-    let spec: Spec = serde_json::from_slice(
-        &container
-            .spec
-            .ok_or_else(|| anyhow!("invalid data from containerd"))?
-            .value,
-    )?;
-    let ns_path = spec
-        .linux
-        .namespaces
-        .iter()
-        .find(|ns| ns.ns_type == "network")
-        .ok_or_else(|| anyhow!("network namespace not found"))?
-        .path
-        .as_ref()
-        .ok_or_else(|| anyhow!("no network namespace path"))?;
-    Ok(ns_path.to_owned())
-}
-
-fn set_namespace(ns_path: &str) -> Result<()> {
-    let fd: RawFd = std::fs::File::open(ns_path)?.into_raw_fd();
-    nix::sched::setns(fd, nix::sched::CloneFlags::CLONE_NEWNET)?;
-    Ok(())
-}
-
-/// Wrapper around main so we can handle all errors in one place.
-async fn wrapped_main() -> Result<()> {
+async fn start() -> Result<()> {
     let args = parse_args();
-    info_message(&format!("mirrod-agent starting with args {:?}", args));
+    debug!("mirrod-agent starting with args {:?}", args);
     let namespace = get_container_namespace(args.container_id).await?;
-    info_message(&format!("Using namespace {}", namespace));
+    debug!("Found namespace to attach to {:?}", &namespace);
     set_namespace(&namespace)?;
-    info_message("Preparing sniffer");
-    let sniffer = prepare_sniffer(&args.ports)?;
-    info_message("Capture starting now");
-    capture(sniffer, &args.ports)
-}
 
-fn info_message(msg: &str) {
-    write_event(&Event::InfoMessage(msg.to_owned()));
-}
+    let listener = TcpListener::bind(SocketAddrV4::new(
+        Ipv4Addr::new(0, 0, 0, 0),
+        args.communicate_port,
+    ))
+    .await?;
 
-fn write_event(event: &Event) {
-    let serialized = serde_json::to_string(&event).unwrap();
-    println!("{}", serialized);
+    let mut state = State::new();
+    let (peers_tx, mut peers_rx) = mpsc::channel::<PeerMessage>(1000);
+    loop {
+        select! {
+            Ok((stream, addr)) = listener.accept() => {
+                debug!("Connection accepeted from {:?}", addr);
+                let id = state.generate_id();
+                let (tx, rx) = mpsc::channel::<DaemonMessage>(1000);
+                state.peers.insert(Peer::new(id, tx));
+                let worker_tx = peers_tx.clone();
+                tokio::spawn(async move {
+                    match peer_handler(rx, worker_tx, stream, id).await {
+                        Ok(()) => {debug!("Peer closed")},
+                        Err(err) => {error!("Peer encountered error {}", err.to_string());}
+                    };
+                });
+            },
+            Some(message) = peers_rx.recv() => {
+                match message.msg {
+                    ClientMessage::PortSubscribe(ports) => {
+                        debug!("peer id {:?} asked to subscribe to {:?}", message.peer_id, ports)
+                    }
+                }
+            }
+        }
+    }
+
+    // let stream = timeout_at(Instant::now() + Duration::from_secs(10), io.accept())
+    //     .await??
+    //     .0;
+    // debug!("Preparing sniffer");
+    // debug!("Capture starting now");
+    // let (tx, mut rx) = mpsc::channel::<MirrordMessage>(1000);
+    // let task = task::spawn(packet_worker(args.ports, tx));
+
+    // loop {
+    //     select! {
+    //         message => rx.recv() => {
+    //             streamma
+    //         }
+    //     }
+    // }
+    
+    Ok(())
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    match wrapped_main().await {
-        Ok(_) => (),
-        Err(e) => {
-            write_event(&Event::Error(AgentError::from_error(e)));
+async fn main() -> Result<()> {
+    env_logger::init();
+    match start().await {
+        Ok(_) => {
+            info!("Done!")
+        }
+        Err(err) => {
+            error!("error occured: {:?}", err.to_string())
         }
     }
-    write_event(&Event::Done);
     Ok(())
 }

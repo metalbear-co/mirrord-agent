@@ -11,9 +11,19 @@ tokio = { version = "1", features = ["full"] }
 tonic = "0.6.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-pcap = "0.9.1"
+pcap = { git = "https://github.com/aviramha/pcap.git", branch="make_codec_public", features =["capture-stream"] }
 pnet = "0.29.0"
 nix = "0.23.1"
 anyhow = "1"
 base64 = "0.13"
 clap = { version = "3.1.2", features = ["derive"] }
+mirrord-protocol = "0.0.1"
+env_logger = "0.9"
+actix-codec = "0.5"
+futures = "0.3.21"
+tracing = "0.1.32"
+tokio-stream = "0.1.8"
+
+# 
+bincode = "2.0.0-rc.1"
+bytes = "1"
