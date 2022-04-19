@@ -1,10 +1,8 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 
 
 use tracing::{debug, info, error};
-use pcap::Active;
-use tokio::task;
-use tokio::select;
+use tokio::{select, task};
 use tokio_stream::StreamExt;
 use futures::SinkExt;
 
@@ -13,20 +11,20 @@ use std::collections::HashSet;
 use std::hash::{Hasher, Hash};
 // use mirrord_protocol::{MirrordCodec, MirrordMessage};
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{timeout_at, Duration, Instant};
 
-use pcap::Capture;
 use tokio::sync::{
-    mpsc::{self, Receiver, Sender},
-    RwLock
+    mpsc::{self},
 };
 
 mod cli;
 mod runtime;
 mod sniffer;
 mod protocol;
+mod common;
+mod util;
+
+use common::PeerID;
 use protocol::{ClientMessage, DaemonMessage, DaemonCodec};
 use cli::parse_args;
 use runtime::{get_container_namespace, set_namespace};
@@ -46,7 +44,6 @@ use sniffer::packet_worker;
 //     // Ok(())
 // }
 
-type PeerID = u32;
 
 #[derive(Debug)]
 struct Peer {
@@ -113,17 +110,29 @@ async fn peer_handler(mut rx: mpsc::Receiver<DaemonMessage>, tx: mpsc::Sender<Pe
     let mut stream = actix_codec::Framed::new(stream, DaemonCodec::new());
     loop {
         select! {
-            Some(message) = stream.next() => {
-                let message = PeerMessage {
-                    msg: message?,
-                    peer_id
-                };
-                debug!("client sent message {:?}", &message);
-                tx.send(message).await?;
+            message = stream.next() => {
+                match message {
+                    Some(message) => {
+                        let message = PeerMessage {
+                            msg: message?,
+                            peer_id
+                        };
+                        debug!("client sent message {:?}", &message);
+                        tx.send(message).await?;
+                    }
+                    None => break
+                }
+                
             },
-            Some(message) = rx.recv() => {
-                debug!("send message to client {:?}", &message);
-                stream.send(message).await?;
+            message = rx.recv() => {
+                match message {
+                    Some(message) => {
+                        debug!("send message to client {:?}", &message);
+                        stream.send(message).await?;
+                    }
+                    None => break
+                }
+                
             }
         }
     }
@@ -145,6 +154,9 @@ async fn start() -> Result<()> {
 
     let mut state = State::new();
     let (peers_tx, mut peers_rx) = mpsc::channel::<PeerMessage>(1000);
+    let (packet_sniffer_tx, packet_sniffer_rx) = mpsc::channel::<DaemonMessage>(1000);
+    let (packet_command_tx, packet_command_rx) = mpsc::channel::<ClientMessage>(1000);
+    let packet_task = task::spawn(packet_worker(packet_sniffer_tx, packet_command_rx));
     loop {
         select! {
             Ok((stream, addr)) = listener.accept() => {
@@ -162,14 +174,26 @@ async fn start() -> Result<()> {
             },
             Some(message) = peers_rx.recv() => {
                 match message.msg {
-                    ClientMessage::PortSubscribe(ports) => {
-                        debug!("peer id {:?} asked to subscribe to {:?}", message.peer_id, ports)
+                    ClientMessage::PortSubscribe(ref ports) => {
+                        debug!("peer id {:?} asked to subscribe to {:?}", message.peer_id, ports);
+                        packet_command_tx.send(message.msg).await?; 
                     }
+                    ClientMessage::Close => {
+                        state.peers.remove(&message.peer_id);
+                    }
+                }
+            },
+            _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+                if state.peers.len() == 0 {
+                    debug!("main thread timeout, no peers connected");
+                    break;
                 }
             }
         }
     }
-
+    drop(packet_command_tx);
+    drop(packet_sniffer_rx);
+    tokio::time::timeout(std::time::Duration::from_secs(10), packet_task).await?;
     // let stream = timeout_at(Instant::now() + Duration::from_secs(10), io.accept())
     //     .await??
     //     .0;

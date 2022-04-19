@@ -1,4 +1,4 @@
-// use mirrord_protocol::{MirrordMessage, NewTCPConnection, TCPClose, TCPData};
+ // use mirrord_protocol::{MirrordMessage, NewTCPConnection, TCPClose, TCPData};
 
 use pcap::{Active, Capture, Device, Linktype};
 use pnet::packet::Packet;
@@ -121,7 +121,7 @@ impl ConnectionManager {
     }
 
     fn get_ports(&self) -> Vec<u16> {
-        Vec::from_iter(self.ports)
+        self.ports.iter().cloned().collect()
     }
 
     fn handle_packet(&mut self, eth_packet: &EthernetPacket) -> Option<Vec<DaemonMessage>> {
@@ -191,7 +191,7 @@ impl PacketCodec for TCPManagerCodec {
     type Type = Vec<u8>;
 
     fn decode(&mut self, packet: pcap::Packet) -> Result<Self::Type, pcap::Error> {
-        Vec::from_iter(packet.data)
+        Ok(packet.data.to_vec())
         // let res = match EthernetPacket::new(packet.data) {
         //     Some(packet) => self
         //         .connection_manager
@@ -224,36 +224,37 @@ fn prepare_sniffer() -> Result<Capture<Active>> {
 
 pub async fn packet_worker(tx: Sender<DaemonMessage>, mut rx: Receiver<ClientMessage>) -> Result<()> {
     let sniffer = prepare_sniffer()?;
-    let mut codec = TCPManagerCodec::new();
+    let codec = TCPManagerCodec {};
     let mut connection_manager = ConnectionManager::new();
     let mut stream = sniffer.stream(codec)?;
     loop {
         select! {
-            Some(packet) = stream.next() => {
-                    let messages = match EthernetPacket::new(packet.data) {
+            Some(Ok(packet)) = stream.next() => {
+                    let messages = match EthernetPacket::new(&packet) {
                         Some(packet) => 
                             connection_manager
                             .handle_packet(&packet)
                             .unwrap_or(vec![]),
                         _ => vec![],
                     };
-                    for message in messages?.into_iter() {
+                    for message in messages.into_iter() {
                         tx.send(message).await?;
                     }
 
             },
-            Some(message) = rx.recv() => {
+            message = rx.recv() => {
                 match message {
-                    ClientMessage::PortSubscribe(new_ports) => {
+                    Some(ClientMessage::PortSubscribe(new_ports)) => {
                         let ports = connection_manager.add_ports(&new_ports);
                         let sniffer = stream.inner_mut();
                         sniffer.filter(&format_bpf(&ports), true);
-                    }
+                    },
+                    Some(ClientMessage::Close) | None => {}
                 }
-            }
+            },
             _ = tx.closed() => {
                 break;
-            }
+            },
 
         }
     }
