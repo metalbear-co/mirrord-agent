@@ -28,8 +28,8 @@ use common::PeerID;
 use protocol::{ClientMessage, DaemonMessage, DaemonCodec};
 use cli::parse_args;
 use runtime::{get_container_namespace, set_namespace};
-use sniffer::packet_worker;
-
+use sniffer::{packet_worker, SnifferCommand, SnifferOutput};
+use util::{PortSubscriptions, IndexAllocator};
 // fn capture(mut sniffer: Capture<Active>, ports: &[u16], tx: Sender<pcap::Packet>) -> Result<()> {
 //     while let Ok(packet) = sniffer.next() {
 //         tx.blocking_send(packet)?;
@@ -83,18 +83,22 @@ impl Borrow<PeerID> for Peer {
 #[derive(Debug)]
 struct State {
    pub peers: HashSet<Peer>,
-   current_id: PeerID,
+   index_allocator: IndexAllocator<PeerID>,
+   pub port_subscriptions: PortSubscriptions,
 }
 
 impl State {
     pub fn new() -> State {
-        State { peers: HashSet::new(), current_id : 0 }
+        State { peers: HashSet::new(), index_allocator: IndexAllocator::new(), port_subscriptions: PortSubscriptions::new() }
     }
 
-    pub fn generate_id(&mut self) -> PeerID {
-        let res = self.current_id;
-        self.current_id += 1;
-        res
+    pub fn generate_id(&mut self) -> Option<PeerID> {
+        self.index_allocator.next_index()
+    }
+
+    pub fn remove_peer(&mut self, peer_id: PeerID) {
+        self.peers.remove(&peer_id);
+        self.index_allocator.free_index(peer_id)
     }
 }
 
@@ -154,37 +158,44 @@ async fn start() -> Result<()> {
 
     let mut state = State::new();
     let (peers_tx, mut peers_rx) = mpsc::channel::<PeerMessage>(1000);
-    let (packet_sniffer_tx, packet_sniffer_rx) = mpsc::channel::<DaemonMessage>(1000);
-    let (packet_command_tx, packet_command_rx) = mpsc::channel::<ClientMessage>(1000);
+    let (packet_sniffer_tx, packet_sniffer_rx) = mpsc::channel::<SnifferOutput>(1000);
+    let (packet_command_tx, packet_command_rx) = mpsc::channel::<SnifferCommand>(1000);
     let packet_task = task::spawn(packet_worker(packet_sniffer_tx, packet_command_rx));
     loop {
         select! {
             Ok((stream, addr)) = listener.accept() => {
                 debug!("Connection accepeted from {:?}", addr);
-                let id = state.generate_id();
-                let (tx, rx) = mpsc::channel::<DaemonMessage>(1000);
-                state.peers.insert(Peer::new(id, tx));
-                let worker_tx = peers_tx.clone();
-                tokio::spawn(async move {
-                    match peer_handler(rx, worker_tx, stream, id).await {
-                        Ok(()) => {debug!("Peer closed")},
-                        Err(err) => {error!("Peer encountered error {}", err.to_string());}
-                    };
-                });
+                if let Some(id) = state.generate_id() {
+                    let (tx, rx) = mpsc::channel::<DaemonMessage>(1000);
+                    state.peers.insert(Peer::new(id, tx));
+                    let worker_tx = peers_tx.clone();
+                    tokio::spawn(async move {
+                        match peer_handler(rx, worker_tx, stream, id).await {
+                            Ok(()) => {debug!("Peer closed")},
+                            Err(err) => {error!("Peer encountered error {}", err.to_string());}
+                        };
+                    });
+                }
+                else {
+                    error!("ran out of connections, dropping new connection");
+                }
+                
             },
             Some(message) = peers_rx.recv() => {
                 match message.msg {
-                    ClientMessage::PortSubscribe(ref ports) => {
+                    ClientMessage::PortSubscribe(ports) => {
                         debug!("peer id {:?} asked to subscribe to {:?}", message.peer_id, ports);
-                        packet_command_tx.send(message.msg).await?; 
+                        state.port_subscriptions.subscribe_many(message.peer_id, ports);
+                        let ports = state.port_subscriptions.get_subscribed_ports();
+                        packet_command_tx.send(SnifferCommand::SetPorts(ports)).await?; 
                     }
                     ClientMessage::Close => {
-                        state.peers.remove(&message.peer_id);
+                        state.remove_peer(message.peer_id);
                     }
                 }
             },
             _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
-                if state.peers.len() == 0 {
+                if state.peers.is_empty() {
                     debug!("main thread timeout, no peers connected");
                     break;
                 }
@@ -193,7 +204,7 @@ async fn start() -> Result<()> {
     }
     drop(packet_command_tx);
     drop(packet_sniffer_rx);
-    tokio::time::timeout(std::time::Duration::from_secs(10), packet_task).await?;
+    tokio::time::timeout(std::time::Duration::from_secs(10), packet_task).await???;
     // let stream = timeout_at(Instant::now() + Duration::from_secs(10), io.accept())
     //     .await??
     //     .0;

@@ -1,5 +1,3 @@
- // use mirrord_protocol::{MirrordMessage, NewTCPConnection, TCPClose, TCPData};
-
 use pcap::{Active, Capture, Device, Linktype};
 use pnet::packet::Packet;
 use tokio::sync::mpsc::{Sender, Receiver};
@@ -19,14 +17,30 @@ use std::hash::{Hash, Hasher};
 use std::net::{Ipv4Addr, IpAddr};
 use tokio::select;
 use tokio::time::{timeout_at, Duration, Instant};
+use tracing::{error, debug};
 
 use crate::protocol::{ClientMessage, DaemonMessage, NewTCPConnection, TCPClose, TCPData};
+use crate::util::IndexAllocator;
 
 const DEFAULT_INTERFACE_NAME: &str = "eth0";
 const DUMMY_BPF: &str = "tcp dst port 1 and tcp src port 1 and dst host 8.1.2.3 and src host 8.1.2.3";
 
 
 type ConnectionID = u16;
+
+
+#[derive(Debug)]
+pub enum SnifferCommand {
+    SetPorts(Vec<u16>),
+    Close
+}
+
+#[derive(Debug)]
+pub enum SnifferOutput {
+    NewTCPConnection(NewTCPConnection),
+    TCPClose(TCPClose),
+    TCPData(TCPData)
+}
 
 #[derive(Debug, Eq, Copy, Clone)]
 pub struct TCPSessionIdentifier {
@@ -82,7 +96,7 @@ fn is_closed_connection(flags: u16) -> bool {
 
 struct ConnectionManager {
     sessions: SessionMap,
-    connection_index: ConnectionID,
+    index_allocator: IndexAllocator<ConnectionID>,
     ports: HashSet<u16>,
 }
 
@@ -104,7 +118,7 @@ impl ConnectionManager {
     fn new() -> Self {
         ConnectionManager {
             sessions: HashMap::new(),
-            connection_index: 0,
+            index_allocator: IndexAllocator::new(),
             ports: HashSet::new(),
         }
     }
@@ -113,18 +127,11 @@ impl ConnectionManager {
         self.ports.contains(&port)
     }
 
-    fn add_ports(&mut self, ports: &[u16]) -> Vec<u16> {
-        ports.iter().for_each(
-            |port| {self.ports.insert(*port);}
-        );
-        self.get_ports()
+    fn set_ports(&mut self, ports: &[u16]) {
+        self.ports = HashSet::from_iter(ports.iter().cloned())
     }
 
-    fn get_ports(&self) -> Vec<u16> {
-        self.ports.iter().cloned().collect()
-    }
-
-    fn handle_packet(&mut self, eth_packet: &EthernetPacket) -> Option<Vec<DaemonMessage>> {
+    fn handle_packet(&mut self, eth_packet: &EthernetPacket) -> Option<Vec<SnifferOutput>> {
         let mut messages = vec![];
         let ip_packet = match eth_packet.get_ethertype() {
             EtherTypes::Ipv4 => Ipv4Packet::new(eth_packet.payload())?,
@@ -155,9 +162,12 @@ impl ConnectionManager {
                     return None;
                 }
 
-                let id = self.connection_index;
-                self.connection_index += 1;
-                messages.push(DaemonMessage::NewTCPConnection(NewTCPConnection {
+                let id = self.index_allocator.next_index().or_else(|| {
+                    error!("connection index exhausted, dropping new connection");
+                    None
+                }
+                )?;
+                messages.push(SnifferOutput::NewTCPConnection(NewTCPConnection {
                     port: dest_port,
                     connection_id: id,
                     address: IpAddr::V4(identifier.source_addr)
@@ -168,14 +178,15 @@ impl ConnectionManager {
         if is_client_packet {
             let data = tcp_packet.payload();
             if !data.is_empty() {
-                messages.push(DaemonMessage::TCPData(TCPData {
+                messages.push(SnifferOutput::TCPData(TCPData {
                     data: base64::encode(data).into_bytes(),
                     connection_id: session,
                 }));
             }
         }
         if is_closed_connection(tcp_flags) {
-            messages.push(DaemonMessage::TCPClose(TCPClose {
+            self.index_allocator.free_index(session);
+            messages.push(SnifferOutput::TCPClose(TCPClose {
                 connection_id: session,
             }));
         } else {
@@ -222,7 +233,7 @@ fn prepare_sniffer() -> Result<Capture<Active>> {
     Ok(cap)
 }
 
-pub async fn packet_worker(tx: Sender<DaemonMessage>, mut rx: Receiver<ClientMessage>) -> Result<()> {
+pub async fn packet_worker(tx: Sender<SnifferOutput>, mut rx: Receiver<SnifferCommand>) -> Result<()> {
     let sniffer = prepare_sniffer()?;
     let codec = TCPManagerCodec {};
     let mut connection_manager = ConnectionManager::new();
@@ -234,7 +245,7 @@ pub async fn packet_worker(tx: Sender<DaemonMessage>, mut rx: Receiver<ClientMes
                         Some(packet) => 
                             connection_manager
                             .handle_packet(&packet)
-                            .unwrap_or(vec![]),
+                            .unwrap_or_default(),
                         _ => vec![],
                     };
                     for message in messages.into_iter() {
@@ -244,15 +255,20 @@ pub async fn packet_worker(tx: Sender<DaemonMessage>, mut rx: Receiver<ClientMes
             },
             message = rx.recv() => {
                 match message {
-                    Some(ClientMessage::PortSubscribe(new_ports)) => {
-                        let ports = connection_manager.add_ports(&new_ports);
+                    Some(SnifferCommand::SetPorts(ports)) => {
+                        debug!("setting ports {:?}", &ports);
+                        connection_manager.set_ports(&ports);
                         let sniffer = stream.inner_mut();
-                        sniffer.filter(&format_bpf(&ports), true);
+                        sniffer.filter(&format_bpf(&ports), true)?;
                     },
-                    Some(ClientMessage::Close) | None => {}
+                    Some(SnifferCommand::Close) | None => {
+                        debug!("sniffer closed");
+                        break;
+                    }
                 }
             },
             _ = tx.closed() => {
+                debug!("closing due to tx closed");
                 break;
             },
 
