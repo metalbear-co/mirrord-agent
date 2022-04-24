@@ -1,8 +1,8 @@
 use actix_codec::{Decoder, Encoder};
 use bincode::{error::DecodeError, Decode, Encode};
-use std::net::IpAddr;
 use bytes::{Buf, BufMut, BytesMut};
 use std::io;
+use std::net::IpAddr;
 
 type ConnectionID = u16;
 
@@ -32,9 +32,8 @@ pub struct LogMessage {
 #[derive(Encode, Decode, Debug, PartialEq, Clone)]
 pub enum ClientMessage {
     PortSubscribe(Vec<u16>),
-    Close
+    Close,
 }
-
 
 #[derive(Encode, Decode, Debug, PartialEq, Clone)]
 pub enum DaemonMessage {
@@ -95,7 +94,6 @@ impl Encoder<ClientMessage> for ClientCodec {
         Ok(())
     }
 }
-
 
 pub struct DaemonCodec {
     config: bincode::config::Configuration,

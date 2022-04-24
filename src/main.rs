@@ -1,35 +1,32 @@
 use anyhow::Result;
 
-
-use tracing::{debug, info, error};
+use futures::SinkExt;
 use tokio::{select, task};
 use tokio_stream::StreamExt;
-use futures::SinkExt;
+use tracing::{debug, error, info};
 
 use std::borrow::Borrow;
 use std::collections::HashSet;
-use std::hash::{Hasher, Hash};
+use std::hash::{Hash, Hasher};
 // use mirrord_protocol::{MirrordCodec, MirrordMessage};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::net::{TcpListener, TcpStream};
 
-use tokio::sync::{
-    mpsc::{self},
-};
+use tokio::sync::mpsc::{self};
 
 mod cli;
+mod common;
+mod protocol;
 mod runtime;
 mod sniffer;
-mod protocol;
-mod common;
 mod util;
 
-use common::PeerID;
-use protocol::{ClientMessage, DaemonMessage, DaemonCodec};
 use cli::parse_args;
+use common::PeerID;
+use protocol::{ClientMessage, DaemonCodec, DaemonMessage};
 use runtime::{get_container_namespace, set_namespace};
 use sniffer::{packet_worker, SnifferCommand, SnifferOutput};
-use util::{PortSubscriptions, IndexAllocator};
+use util::{IndexAllocator, Subscriptions};
 // fn capture(mut sniffer: Capture<Active>, ports: &[u16], tx: Sender<pcap::Packet>) -> Result<()> {
 //     while let Ok(packet) = sniffer.next() {
 //         tx.blocking_send(packet)?;
@@ -44,19 +41,17 @@ use util::{PortSubscriptions, IndexAllocator};
 //     // Ok(())
 // }
 
+type Port = u16;
 
 #[derive(Debug)]
 struct Peer {
     id: PeerID,
-    channel: mpsc::Sender<DaemonMessage>
+    channel: mpsc::Sender<DaemonMessage>,
 }
 
 impl Peer {
     pub fn new(id: PeerID, channel: mpsc::Sender<DaemonMessage>) -> Peer {
-        Peer {
-            id,
-            channel
-        }
+        Peer { id, channel }
     }
 }
 impl Eq for Peer {}
@@ -66,7 +61,6 @@ impl PartialEq for Peer {
         self.id == other.id
     }
 }
-
 
 impl Hash for Peer {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -82,14 +76,18 @@ impl Borrow<PeerID> for Peer {
 
 #[derive(Debug)]
 struct State {
-   pub peers: HashSet<Peer>,
-   index_allocator: IndexAllocator<PeerID>,
-   pub port_subscriptions: PortSubscriptions,
+    pub peers: HashSet<Peer>,
+    index_allocator: IndexAllocator<PeerID>,
+    pub port_subscriptions: Subscriptions<Port, PeerID>,
 }
 
 impl State {
     pub fn new() -> State {
-        State { peers: HashSet::new(), index_allocator: IndexAllocator::new(), port_subscriptions: PortSubscriptions::new() }
+        State {
+            peers: HashSet::new(),
+            index_allocator: IndexAllocator::new(),
+            port_subscriptions: Subscriptions::new(),
+        }
     }
 
     pub fn generate_id(&mut self) -> Option<PeerID> {
@@ -102,15 +100,18 @@ impl State {
     }
 }
 
-
 #[derive(Debug)]
 struct PeerMessage {
     msg: ClientMessage,
-    peer_id: PeerID
+    peer_id: PeerID,
 }
 
-async fn peer_handler(mut rx: mpsc::Receiver<DaemonMessage>, tx: mpsc::Sender<PeerMessage>, stream: TcpStream, peer_id: PeerID) -> Result<()>
-{
+async fn peer_handler(
+    mut rx: mpsc::Receiver<DaemonMessage>,
+    tx: mpsc::Sender<PeerMessage>,
+    stream: TcpStream,
+    peer_id: PeerID,
+) -> Result<()> {
     let mut stream = actix_codec::Framed::new(stream, DaemonCodec::new());
     loop {
         select! {
@@ -126,7 +127,7 @@ async fn peer_handler(mut rx: mpsc::Receiver<DaemonMessage>, tx: mpsc::Sender<Pe
                     }
                     None => break
                 }
-                
+
             },
             message = rx.recv() => {
                 match message {
@@ -136,7 +137,7 @@ async fn peer_handler(mut rx: mpsc::Receiver<DaemonMessage>, tx: mpsc::Sender<Pe
                     }
                     None => break
                 }
-                
+
             }
         }
     }
@@ -179,15 +180,15 @@ async fn start() -> Result<()> {
                 else {
                     error!("ran out of connections, dropping new connection");
                 }
-                
+
             },
             Some(message) = peers_rx.recv() => {
                 match message.msg {
                     ClientMessage::PortSubscribe(ports) => {
                         debug!("peer id {:?} asked to subscribe to {:?}", message.peer_id, ports);
                         state.port_subscriptions.subscribe_many(message.peer_id, ports);
-                        let ports = state.port_subscriptions.get_subscribed_ports();
-                        packet_command_tx.send(SnifferCommand::SetPorts(ports)).await?; 
+                        let ports = state.port_subscriptions.get_subscribed_topics();
+                        packet_command_tx.send(SnifferCommand::SetPorts(ports)).await?;
                     }
                     ClientMessage::Close => {
                         state.remove_peer(message.peer_id);
@@ -202,6 +203,7 @@ async fn start() -> Result<()> {
             }
         }
     }
+    packet_command_tx.send(SnifferCommand::Close).await?;
     drop(packet_command_tx);
     drop(packet_sniffer_rx);
     tokio::time::timeout(std::time::Duration::from_secs(10), packet_task).await???;
@@ -220,7 +222,7 @@ async fn start() -> Result<()> {
     //         }
     //     }
     // }
-    
+
     Ok(())
 }
 

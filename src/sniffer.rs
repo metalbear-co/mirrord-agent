@@ -1,6 +1,6 @@
 use pcap::{Active, Capture, Device, Linktype};
 use pnet::packet::Packet;
-use tokio::sync::mpsc::{Sender, Receiver};
+use tokio::sync::mpsc::{Receiver, Sender};
 
 use anyhow::{anyhow, Result};
 use futures::StreamExt;
@@ -14,32 +14,30 @@ use pnet::packet::tcp::TcpPacket;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
-use std::net::{Ipv4Addr, IpAddr};
+use std::net::{IpAddr, Ipv4Addr};
 use tokio::select;
-use tokio::time::{timeout_at, Duration, Instant};
-use tracing::{error, debug};
+use tracing::{debug, error};
 
-use crate::protocol::{ClientMessage, DaemonMessage, NewTCPConnection, TCPClose, TCPData};
+use crate::protocol::{NewTCPConnection, TCPClose, TCPData};
 use crate::util::IndexAllocator;
 
 const DEFAULT_INTERFACE_NAME: &str = "eth0";
-const DUMMY_BPF: &str = "tcp dst port 1 and tcp src port 1 and dst host 8.1.2.3 and src host 8.1.2.3";
-
+const DUMMY_BPF: &str =
+    "tcp dst port 1 and tcp src port 1 and dst host 8.1.2.3 and src host 8.1.2.3";
 
 type ConnectionID = u16;
-
 
 #[derive(Debug)]
 pub enum SnifferCommand {
     SetPorts(Vec<u16>),
-    Close
+    Close,
 }
 
 #[derive(Debug)]
 pub enum SnifferOutput {
     NewTCPConnection(NewTCPConnection),
     TCPClose(TCPClose),
-    TCPData(TCPData)
+    TCPData(TCPData),
 }
 
 #[derive(Debug, Eq, Copy, Clone)]
@@ -100,7 +98,6 @@ struct ConnectionManager {
     ports: HashSet<u16>,
 }
 
-
 /// Build a filter of format: "tcp port (80 or 443 or 50 or 90)"
 fn format_bpf(ports: &[u16]) -> String {
     format!(
@@ -112,7 +109,6 @@ fn format_bpf(ports: &[u16]) -> String {
             .join(" or")
     )
 }
-
 
 impl ConnectionManager {
     fn new() -> Self {
@@ -138,9 +134,7 @@ impl ConnectionManager {
             _ => return None,
         };
         let tcp_packet = match ip_packet.get_next_level_protocol() {
-            IpNextHeaderProtocols::Tcp => {
-                TcpPacket::new(ip_packet.payload())?
-            }
+            IpNextHeaderProtocols::Tcp => TcpPacket::new(ip_packet.payload())?,
             _ => return None,
         };
         let dest_port = tcp_packet.get_destination();
@@ -165,12 +159,11 @@ impl ConnectionManager {
                 let id = self.index_allocator.next_index().or_else(|| {
                     error!("connection index exhausted, dropping new connection");
                     None
-                }
-                )?;
+                })?;
                 messages.push(SnifferOutput::NewTCPConnection(NewTCPConnection {
                     port: dest_port,
                     connection_id: id,
-                    address: IpAddr::V4(identifier.source_addr)
+                    address: IpAddr::V4(identifier.source_addr),
                 }));
                 id
             }
@@ -214,8 +207,6 @@ impl PacketCodec for TCPManagerCodec {
     }
 }
 
-
-
 fn prepare_sniffer() -> Result<Capture<Active>> {
     let interface_names_match = |iface: &Device| iface.name == DEFAULT_INTERFACE_NAME;
     let interfaces = Device::list()?;
@@ -233,7 +224,10 @@ fn prepare_sniffer() -> Result<Capture<Active>> {
     Ok(cap)
 }
 
-pub async fn packet_worker(tx: Sender<SnifferOutput>, mut rx: Receiver<SnifferCommand>) -> Result<()> {
+pub async fn packet_worker(
+    tx: Sender<SnifferOutput>,
+    mut rx: Receiver<SnifferCommand>,
+) -> Result<()> {
     let sniffer = prepare_sniffer()?;
     let codec = TCPManagerCodec {};
     let mut connection_manager = ConnectionManager::new();
@@ -242,7 +236,7 @@ pub async fn packet_worker(tx: Sender<SnifferOutput>, mut rx: Receiver<SnifferCo
         select! {
             Some(Ok(packet)) = stream.next() => {
                     let messages = match EthernetPacket::new(&packet) {
-                        Some(packet) => 
+                        Some(packet) =>
                             connection_manager
                             .handle_packet(&packet)
                             .unwrap_or_default(),
