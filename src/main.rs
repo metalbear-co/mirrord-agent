@@ -23,23 +23,10 @@ mod util;
 
 use cli::parse_args;
 use common::PeerID;
-use protocol::{ClientMessage, DaemonCodec, DaemonMessage};
+use protocol::{ClientMessage, ConnectionID, DaemonCodec, DaemonMessage};
 use runtime::{get_container_namespace, set_namespace};
 use sniffer::{packet_worker, SnifferCommand, SnifferOutput};
 use util::{IndexAllocator, Subscriptions};
-// fn capture(mut sniffer: Capture<Active>, ports: &[u16], tx: Sender<pcap::Packet>) -> Result<()> {
-//     while let Ok(packet) = sniffer.next() {
-//         tx.blocking_send(packet)?;
-//     }
-//     Ok(())
-//     // let mut connection_manager = ConnectionManager::new(ports.to_owned());
-//     // while let Ok(packet) = sniffer.next() {
-//     //     let packet = EthernetPacket::new(&packet)
-//     //         .ok_or_else(|| anyhow!("Packet is not an ethernet packet"))?;
-//     //     let _ = connection_manager.handle_packet(&packet);
-//     // }
-//     // Ok(())
-// }
 
 type Port = u16;
 
@@ -79,6 +66,7 @@ struct State {
     pub peers: HashSet<Peer>,
     index_allocator: IndexAllocator<PeerID>,
     pub port_subscriptions: Subscriptions<Port, PeerID>,
+    pub connections_subscriptions: Subscriptions<ConnectionID, PeerID>,
 }
 
 impl State {
@@ -87,6 +75,7 @@ impl State {
             peers: HashSet::new(),
             index_allocator: IndexAllocator::new(),
             port_subscriptions: Subscriptions::new(),
+            connections_subscriptions: Subscriptions::new(),
         }
     }
 
@@ -96,6 +85,8 @@ impl State {
 
     pub fn remove_peer(&mut self, peer_id: PeerID) {
         self.peers.remove(&peer_id);
+        self.port_subscriptions.remove_client(peer_id);
+        self.connections_subscriptions.remove_client(peer_id);
         self.index_allocator.free_index(peer_id)
     }
 }
@@ -159,7 +150,7 @@ async fn start() -> Result<()> {
 
     let mut state = State::new();
     let (peers_tx, mut peers_rx) = mpsc::channel::<PeerMessage>(1000);
-    let (packet_sniffer_tx, packet_sniffer_rx) = mpsc::channel::<SnifferOutput>(1000);
+    let (packet_sniffer_tx, mut packet_sniffer_rx) = mpsc::channel::<SnifferOutput>(1000);
     let (packet_command_tx, packet_command_rx) = mpsc::channel::<SnifferCommand>(1000);
     let packet_task = task::spawn(packet_worker(packet_sniffer_tx, packet_command_rx));
     loop {
@@ -192,8 +183,67 @@ async fn start() -> Result<()> {
                     }
                     ClientMessage::Close => {
                         state.remove_peer(message.peer_id);
+                        let ports = state.port_subscriptions.get_subscribed_topics();
+                        packet_command_tx.send(SnifferCommand::SetPorts(ports)).await?;
                     }
                 }
+            },
+            message = packet_sniffer_rx.recv() => {
+                match message {
+                    Some(message) => {
+                        match message {
+                            SnifferOutput::NewTCPConnection(conn) => {
+                                let peer_ids = state.port_subscriptions.get_topic_subscribers(conn.port);
+                                for peer_id in peer_ids {
+                                    state.connections_subscriptions.subscribe(peer_id, conn.connection_id);
+                                    if let Some(peer) = state.peers.get(&peer_id) {
+                                        match peer.channel.send(DaemonMessage::NewTCPConnection(conn.clone())).await {
+                                            Ok(_) => {},
+                                            Err(err) => {
+                                                error!("error sending message {:?}", err);
+                                            }
+                                        }
+                                    }
+                                }
+                                debug!("new tcp connection {:?}", conn);
+                            },
+                            SnifferOutput::TCPClose(close) => {
+                                let peer_ids = state.connections_subscriptions.get_topic_subscribers(close.connection_id);
+                                for peer_id in peer_ids {
+                                    if let Some(peer) = state.peers.get(&peer_id) {
+                                        match peer.channel.send(DaemonMessage::TCPClose(close.clone())).await {
+                                            Ok(_) => {},
+                                            Err(err) => {
+                                                error!("error sending message {:?}", err);
+                                            }
+                                        }
+                                    }
+                                }
+                                state.connections_subscriptions.remove_topic(close.connection_id);
+                                debug!("tcp close {:?}", close);
+                            },
+                            SnifferOutput::TCPData(data) => {
+                                let peer_ids = state.connections_subscriptions.get_topic_subscribers(data.connection_id);
+                                for peer_id in peer_ids {
+                                    if let Some(peer) = state.peers.get(&peer_id) {
+                                        match peer.channel.send(DaemonMessage::TCPData(data.clone())).await {
+                                            Ok(_) => {},
+                                            Err(err) => {
+                                                error!("error sending message {:?}", err);
+                                            }
+                                        }
+                                    }
+                                }
+                                debug!("new data {:?}", data);
+                            },
+                        }
+                    }
+                    None => {
+                        info!("sniffer died, exiting");
+                        break;
+                    }
+                }
+
             },
             _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
                 if state.peers.is_empty() {

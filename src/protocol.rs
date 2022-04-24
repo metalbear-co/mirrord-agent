@@ -4,7 +4,7 @@ use bytes::{Buf, BufMut, BytesMut};
 use std::io;
 use std::net::IpAddr;
 
-type ConnectionID = u16;
+pub type ConnectionID = u16;
 
 #[derive(Encode, Decode, Debug, PartialEq, Clone)]
 pub struct NewTCPConnection {
