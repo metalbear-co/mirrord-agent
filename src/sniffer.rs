@@ -221,6 +221,7 @@ fn prepare_sniffer() -> Result<Capture<Active>> {
     cap.set_datalink(Linktype::ETHERNET)?;
     // Set a dummy filter that shouldn't capture anything. This makes the code easier.
     cap.filter(DUMMY_BPF, true)?;
+    cap = cap.setnonblock()?;
     Ok(cap)
 }
 
@@ -228,10 +229,13 @@ pub async fn packet_worker(
     tx: Sender<SnifferOutput>,
     mut rx: Receiver<SnifferCommand>,
 ) -> Result<()> {
+    debug!("preparing sniffer");
     let sniffer = prepare_sniffer()?;
+    debug!("done prepare sniffer");
     let codec = TCPManagerCodec {};
     let mut connection_manager = ConnectionManager::new();
     let mut stream = sniffer.stream(codec)?;
+    debug!("starting loop");
     loop {
         select! {
             Some(Ok(packet)) = stream.next() => {
@@ -268,5 +272,6 @@ pub async fn packet_worker(
 
         }
     }
+    debug!("end of packet_worker");
     Ok(())
 }

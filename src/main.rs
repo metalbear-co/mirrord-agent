@@ -138,9 +138,11 @@ async fn peer_handler(
 async fn start() -> Result<()> {
     let args = parse_args();
     debug!("mirrod-agent starting with args {:?}", args);
-    let namespace = get_container_namespace(args.container_id).await?;
-    debug!("Found namespace to attach to {:?}", &namespace);
-    set_namespace(&namespace)?;
+    if let Some(container_id) = args.container_id {
+        let namespace = get_container_namespace(container_id).await?;
+        debug!("Found namespace to attach to {:?}", &namespace);
+        set_namespace(&namespace)?;
+    }
 
     let listener = TcpListener::bind(SocketAddrV4::new(
         Ipv4Addr::new(0, 0, 0, 0),
@@ -253,7 +255,10 @@ async fn start() -> Result<()> {
             }
         }
     }
-    packet_command_tx.send(SnifferCommand::Close).await?;
+    debug!("shutting down start");
+    if !packet_command_tx.is_closed() {
+        packet_command_tx.send(SnifferCommand::Close).await?;
+    };
     drop(packet_command_tx);
     drop(packet_sniffer_rx);
     tokio::time::timeout(std::time::Duration::from_secs(10), packet_task).await???;

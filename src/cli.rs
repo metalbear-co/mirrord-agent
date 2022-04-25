@@ -5,11 +5,8 @@ use clap::Parser;
 pub struct Args {
     /// Container id to get traffic from
     #[clap(short, long)]
-    pub container_id: String,
+    pub container_id: Option<String>,
 
-    /// Ports to get traffic from
-    #[clap(short, long)]
-    pub ports: Vec<u16>,
 
     /// Port to use for communication
     #[clap(short = 'l', long, default_value_t = 61337)]
