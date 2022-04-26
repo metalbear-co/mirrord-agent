@@ -18,10 +18,9 @@ use std::net::{IpAddr, Ipv4Addr};
 use tokio::select;
 use tracing::{debug, error};
 
-use crate::protocol::{NewTCPConnection, TCPClose, TCPData};
 use crate::util::IndexAllocator;
+use mirrord_protocol::{NewTCPConnection, TCPClose, TCPData};
 
-const DEFAULT_INTERFACE_NAME: &str = "eth0";
 const DUMMY_BPF: &str =
     "tcp dst port 1 and tcp src port 1 and dst host 8.1.2.3 and src host 8.1.2.3";
 
@@ -106,7 +105,7 @@ fn format_bpf(ports: &[u16]) -> String {
             .iter()
             .map(|p| p.to_string())
             .collect::<Vec<String>>()
-            .join(" or")
+            .join(" or ")
     )
 }
 
@@ -172,7 +171,7 @@ impl ConnectionManager {
             let data = tcp_packet.payload();
             if !data.is_empty() {
                 messages.push(SnifferOutput::TCPData(TCPData {
-                    data: base64::encode(data).into_bytes(),
+                    data: data.to_vec(),
                     connection_id: session,
                 }));
             }
@@ -207,8 +206,8 @@ impl PacketCodec for TCPManagerCodec {
     }
 }
 
-fn prepare_sniffer() -> Result<Capture<Active>> {
-    let interface_names_match = |iface: &Device| iface.name == DEFAULT_INTERFACE_NAME;
+fn prepare_sniffer(interface: String) -> Result<Capture<Active>> {
+    let interface_names_match = |iface: &Device| iface.name == interface;
     let interfaces = Device::list()?;
     let interface = interfaces
         .into_iter()
@@ -228,14 +227,14 @@ fn prepare_sniffer() -> Result<Capture<Active>> {
 pub async fn packet_worker(
     tx: Sender<SnifferOutput>,
     mut rx: Receiver<SnifferCommand>,
+    interface: String,
 ) -> Result<()> {
     debug!("preparing sniffer");
-    let sniffer = prepare_sniffer()?;
+    let sniffer = prepare_sniffer(interface)?;
     debug!("done prepare sniffer");
     let codec = TCPManagerCodec {};
     let mut connection_manager = ConnectionManager::new();
     let mut stream = sniffer.stream(codec)?;
-    debug!("starting loop");
     loop {
         select! {
             Some(Ok(packet)) = stream.next() => {
@@ -257,7 +256,15 @@ pub async fn packet_worker(
                         debug!("setting ports {:?}", &ports);
                         connection_manager.set_ports(&ports);
                         let sniffer = stream.inner_mut();
-                        sniffer.filter(&format_bpf(&ports), true)?;
+                        if ports.is_empty() {
+                            debug!("empty ports, setting dummy bpf");
+                            sniffer.filter(DUMMY_BPF, true)?
+                        } else {
+                            let bpf = format_bpf(&ports);
+                            debug!("setting bpf to {:?}", &bpf);
+                            sniffer.filter(&bpf, true)?
+                        };
+
                     },
                     Some(SnifferCommand::Close) | None => {
                         debug!("sniffer closed");

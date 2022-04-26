@@ -16,14 +16,13 @@ use tokio::sync::mpsc::{self};
 
 mod cli;
 mod common;
-mod protocol;
 mod runtime;
 mod sniffer;
 mod util;
 
 use cli::parse_args;
 use common::PeerID;
-use protocol::{ClientMessage, ConnectionID, DaemonCodec, DaemonMessage};
+use mirrord_protocol::{ClientMessage, ConnectionID, DaemonCodec, DaemonMessage};
 use runtime::{get_container_namespace, set_namespace};
 use sniffer::{packet_worker, SnifferCommand, SnifferOutput};
 use util::{IndexAllocator, Subscriptions};
@@ -132,6 +131,11 @@ async fn peer_handler(
             }
         }
     }
+    tx.send(PeerMessage {
+        msg: ClientMessage::Close,
+        peer_id,
+    })
+    .await?;
     Ok(())
 }
 
@@ -154,7 +158,11 @@ async fn start() -> Result<()> {
     let (peers_tx, mut peers_rx) = mpsc::channel::<PeerMessage>(1000);
     let (packet_sniffer_tx, mut packet_sniffer_rx) = mpsc::channel::<SnifferOutput>(1000);
     let (packet_command_tx, packet_command_rx) = mpsc::channel::<SnifferCommand>(1000);
-    let packet_task = task::spawn(packet_worker(packet_sniffer_tx, packet_command_rx));
+    let packet_task = task::spawn(packet_worker(
+        packet_sniffer_tx,
+        packet_command_rx,
+        args.interface.clone(),
+    ));
     loop {
         select! {
             Ok((stream, addr)) = listener.accept() => {
@@ -184,10 +192,16 @@ async fn start() -> Result<()> {
                         packet_command_tx.send(SnifferCommand::SetPorts(ports)).await?;
                     }
                     ClientMessage::Close => {
+                        debug!("peer id {:?} sent close", &message.peer_id);
                         state.remove_peer(message.peer_id);
                         let ports = state.port_subscriptions.get_subscribed_topics();
                         packet_command_tx.send(SnifferCommand::SetPorts(ports)).await?;
+                    },
+                    ClientMessage::ConnectionUnsubscribe(connection_id) => {
+                        state.connections_subscriptions.unsubscribe(message.peer_id, connection_id);
                     }
+
+
                 }
             },
             message = packet_sniffer_rx.recv() => {
@@ -247,7 +261,7 @@ async fn start() -> Result<()> {
                 }
 
             },
-            _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(args.communication_timeout.into())) => {
                 if state.peers.is_empty() {
                     debug!("main thread timeout, no peers connected");
                     break;
