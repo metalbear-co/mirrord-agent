@@ -34,4 +34,5 @@ jobs:
       with:
         profile: minimal
         toolchain: stable
-    - run: cargo test
+    - run: sudo apt install -y libpcap-dev
+    - run: sudo cargo test
