@@ -15,7 +15,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{self};
 
 mod cli;
-mod common;
 mod runtime;
 mod sniffer;
 mod util;
