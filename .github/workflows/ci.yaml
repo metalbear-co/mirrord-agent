@@ -35,4 +35,4 @@ jobs:
         profile: minimal
         toolchain: stable
     - run: sudo apt install -y libpcap-dev
-    - run: sudo PATH=/home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin /home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo test
+    - run: sudo PATH=/home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:/usr/bin:/usr/sbin /home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo test
