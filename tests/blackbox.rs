@@ -123,9 +123,7 @@ mod tests {
         assert!(result.status.success());
         let stderr = String::from_utf8_lossy(&result.stderr);
         print!("{:?}", stderr);
-        assert!(!stderr
-            .to_ascii_lowercase()
-            .contains("error"));
+        assert!(!stderr.to_ascii_lowercase().contains("error"));
         assert!(!String::from_utf8_lossy(&result.stdout)
             .to_ascii_lowercase()
             .contains("error"));

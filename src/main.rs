@@ -21,13 +21,12 @@ mod sniffer;
 mod util;
 
 use cli::parse_args;
-use common::PeerID;
-use mirrord_protocol::{ClientMessage, ConnectionID, DaemonCodec, DaemonMessage};
+use mirrord_protocol::{ClientMessage, ConnectionID, DaemonCodec, DaemonMessage, Port};
 use runtime::{get_container_namespace, set_namespace};
 use sniffer::{packet_worker, SnifferCommand, SnifferOutput};
 use util::{IndexAllocator, Subscriptions};
 
-type Port = u16;
+type PeerID = u32;
 
 #[derive(Debug)]
 struct Peer {
