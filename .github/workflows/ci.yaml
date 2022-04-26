@@ -34,5 +34,5 @@ jobs:
       with:
         profile: minimal
         toolchain: stable
-    - run: sudo apt install -y libpcap-dev
+    - run: sudo apt install -y libpcap-dev cmake
     - run: sudo PATH=/home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:/usr/bin:/usr/sbin /home/runner/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo test
