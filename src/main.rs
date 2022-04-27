@@ -274,21 +274,6 @@ async fn start() -> Result<()> {
     drop(packet_command_tx);
     drop(packet_sniffer_rx);
     tokio::time::timeout(std::time::Duration::from_secs(10), packet_task).await???;
-    // let stream = timeout_at(Instant::now() + Duration::from_secs(10), io.accept())
-    //     .await??
-    //     .0;
-    // debug!("Preparing sniffer");
-    // debug!("Capture starting now");
-    // let (tx, mut rx) = mpsc::channel::<MirrordMessage>(1000);
-    // let task = task::spawn(packet_worker(args.ports, tx));
-
-    // loop {
-    //     select! {
-    //         message => rx.recv() => {
-    //             streamma
-    //         }
-    //     }
-    // }
 
     Ok(())
 }
@@ -298,7 +283,7 @@ async fn main() -> Result<()> {
     env_logger::init();
     match start().await {
         Ok(_) => {
-            info!("Done!")
+            info!("Exiting successfuly")
         }
         Err(err) => {
             error!("error occured: {:?}", err.to_string())
