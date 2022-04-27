@@ -139,7 +139,7 @@ async fn peer_handler(
 
 async fn start() -> Result<()> {
     let args = parse_args();
-    debug!("mirrod-agent starting with args {:?}", args);
+    debug!("mirrord-agent starting with args {:?}", args);
     if let Some(container_id) = args.container_id {
         let namespace = get_container_namespace(container_id).await?;
         debug!("Found namespace to attach to {:?}", &namespace);
