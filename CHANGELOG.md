@@ -1,4 +1,8 @@
 ## [Unreleased]
+## 2.0.0-alpha-1 - 28/4/2022
+### Misc
+* Fix image build lacks cmake
+
 ## 2.0.0-alpha - 27/4/2022
 ### Refactor
 * The code was refactored to support new upcoming features.
