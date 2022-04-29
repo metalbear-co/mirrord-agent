@@ -1,4 +1,10 @@
 ## [Unreleased]
+## 2.0.0-alpha-2 - 30/4/2022
+### Fixed
+* Fixed obtaining namespace & setting it using container id (seems to be a bug in new containerd-client version?)
+### Misc
+* Add manual image build and push workflow
+* Add docker image build sanity
 ## 2.0.0-alpha-1 - 28/4/2022
 ### Misc
 * Fix image build lacks cmake
