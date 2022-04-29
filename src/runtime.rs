@@ -2,13 +2,15 @@ use nix::sched::setns;
 use std::os::unix::io::{IntoRawFd, RawFd};
 
 use anyhow::{anyhow, Result};
-use containerd_client::services::v1::containers_client::ContainersClient;
-use containerd_client::services::v1::GetContainerRequest;
-use containerd_client::{connect, with_namespace};
+use containerd_client::{
+    connect,
+    services::v1::{containers_client::ContainersClient, GetContainerRequest},
+    tonic::Request,
+    with_namespace,
+};
 use std::fs::File;
 
 use serde::{Deserialize, Serialize};
-use tonic::Request;
 
 const CONTAINERD_SOCK_PATH: &str = "/run/containerd/containerd.sock";
 const DEFAULT_CONTAINERD_NAMESPACE: &str = "k8s.io";
