@@ -1,4 +1,6 @@
 ## [Unreleased]
+### Misc
+* Add manual image build and push workflow
 ## 2.0.0-alpha-1 - 28/4/2022
 ### Misc
 * Fix image build lacks cmake

@@ -9,6 +9,7 @@ use std::fs::File;
 
 use serde::{Deserialize, Serialize};
 use tonic::Request;
+use tracing::debug;
 
 const CONTAINERD_SOCK_PATH: &str = "/run/containerd/containerd.sock";
 const DEFAULT_CONTAINERD_NAMESPACE: &str = "k8s.io";
@@ -37,10 +38,12 @@ pub fn set_namespace(ns_path: &str) -> Result<()> {
 }
 
 pub async fn get_container_namespace(container_id: String) -> Result<String> {
+    debug!("connecting to containerd");
     let channel = connect(CONTAINERD_SOCK_PATH).await?;
     let mut client = ContainersClient::new(channel);
     let request = GetContainerRequest { id: container_id };
     let request = with_namespace!(request, DEFAULT_CONTAINERD_NAMESPACE);
+    debug!("get container {:?}", &container_id);
     let resp = client.get(request).await?;
     let resp = resp.into_inner();
     let container = resp
