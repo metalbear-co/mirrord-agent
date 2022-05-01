@@ -18,7 +18,10 @@ use std::net::{IpAddr, Ipv4Addr};
 use tokio::select;
 use tracing::{debug, error};
 
-use crate::util::IndexAllocator;
+use crate::{
+    runtime::{get_container_namespace, set_namespace},
+    util::IndexAllocator,
+};
 use mirrord_protocol::{NewTCPConnection, TCPClose, TCPData};
 
 const DUMMY_BPF: &str =
@@ -228,7 +231,14 @@ pub async fn packet_worker(
     tx: Sender<SnifferOutput>,
     mut rx: Receiver<SnifferCommand>,
     interface: String,
+    container_id: Option<String>,
 ) -> Result<()> {
+    debug!("setting namespace");
+    if let Some(container_id) = container_id {
+        let namespace = get_container_namespace(container_id).await?;
+        debug!("Found namespace to attach to {:?}", &namespace);
+        set_namespace(&namespace)?;
+    }
     debug!("preparing sniffer");
     let sniffer = prepare_sniffer(interface)?;
     debug!("done prepare sniffer");

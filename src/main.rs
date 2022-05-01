@@ -1,18 +1,21 @@
 use anyhow::Result;
 
 use futures::SinkExt;
-use tokio::{select, task};
+use tokio::{
+    net::{TcpListener, TcpStream},
+    select,
+    sync::mpsc::{self},
+};
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info};
 
-use std::borrow::Borrow;
-use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
-// use mirrord_protocol::{MirrordCodec, MirrordMessage};
-use std::net::{Ipv4Addr, SocketAddrV4};
-use tokio::net::{TcpListener, TcpStream};
-
-use tokio::sync::mpsc::{self};
+use mirrord_protocol::{ClientMessage, ConnectionID, DaemonCodec, DaemonMessage, Port};
+use std::{
+    borrow::Borrow,
+    collections::HashSet,
+    hash::{Hash, Hasher},
+    net::{Ipv4Addr, SocketAddrV4},
+};
 
 mod cli;
 mod runtime;
@@ -20,8 +23,6 @@ mod sniffer;
 mod util;
 
 use cli::parse_args;
-use mirrord_protocol::{ClientMessage, ConnectionID, DaemonCodec, DaemonMessage, Port};
-use runtime::{get_container_namespace, set_namespace};
 use sniffer::{packet_worker, SnifferCommand, SnifferOutput};
 use util::{IndexAllocator, Subscriptions};
 
@@ -140,11 +141,6 @@ async fn peer_handler(
 async fn start() -> Result<()> {
     let args = parse_args();
     debug!("mirrord-agent starting with args {:?}", args);
-    if let Some(container_id) = args.container_id {
-        let namespace = get_container_namespace(container_id).await?;
-        debug!("Found namespace to attach to {:?}", &namespace);
-        set_namespace(&namespace)?;
-    }
 
     let listener = TcpListener::bind(SocketAddrV4::new(
         Ipv4Addr::new(0, 0, 0, 0),
@@ -156,10 +152,12 @@ async fn start() -> Result<()> {
     let (peers_tx, mut peers_rx) = mpsc::channel::<PeerMessage>(1000);
     let (packet_sniffer_tx, mut packet_sniffer_rx) = mpsc::channel::<SnifferOutput>(1000);
     let (packet_command_tx, packet_command_rx) = mpsc::channel::<SnifferCommand>(1000);
-    let packet_task = task::spawn(packet_worker(
+    // We use tokio spawn so it'll create another thread.
+    let packet_task = tokio::spawn(packet_worker(
         packet_sniffer_tx,
         packet_command_rx,
         args.interface.clone(),
+        args.container_id.clone(),
     ));
     loop {
         select! {
