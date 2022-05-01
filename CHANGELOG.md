@@ -1,4 +1,7 @@
 ## [Unreleased]
+## 2.0.0-alpha-3 - 1/5/2022
+### Changed
+* Change behavior of namespace change - set the namespace only in the packet sniffing, in a new thread so "command" socket will listen on the original network namespace
 ## 2.0.0-alpha-2 - 30/4/2022
 ### Fixed
 * Fixed obtaining namespace & setting it using container id (seems to be a bug in new containerd-client version?)
