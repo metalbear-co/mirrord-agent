@@ -14,7 +14,7 @@ pcap = { git = "https://github.com/aviramha/pcap.git", branch="make_codec_public
 pnet = "0.29.0"
 nix = "0.23.1"
 anyhow = "1"
-clap = { version = "3.1.2", features = ["derive"] }
+clap = { version = "3.1.15", features = ["derive"] }
 mirrord-protocol = "0.2"
 env_logger = "0.9"
 actix-codec = "0.5"
