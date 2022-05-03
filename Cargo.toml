@@ -21,7 +21,7 @@ actix-codec = "0.5"
 futures = "0.3.21"
 tracing = "0.1.32"
 tokio-stream = "0.1.8"
-num-traits = "0.2.14"
+num-traits = "0.2.15"
 
 [dev-dependencies]
 test_bin = "0.4.0"
